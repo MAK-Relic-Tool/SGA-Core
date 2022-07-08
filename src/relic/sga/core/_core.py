@@ -1,5 +1,5 @@
 """
-Shared definitions used by several components of the module
+Definitions expressed concretely in core
 """
 from __future__ import annotations
 
