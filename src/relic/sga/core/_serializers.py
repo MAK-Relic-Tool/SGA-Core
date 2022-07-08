@@ -17,8 +17,8 @@ from typing import (
 from serialization_tools.size import KiB
 from serialization_tools.structx import Struct
 
-from relic.sga import _abc
-from relic.sga._abc import (
+from relic.sga.core import _abc
+from relic.sga.core._abc import (
     DriveDef,
     FolderDef,
     FileLazyInfo,
@@ -29,9 +29,9 @@ from relic.sga._abc import (
     Folder,
     Drive,
 )
-from relic.sga._core import StorageType
-from relic.sga.errors import MD5MismatchError
-from relic.sga.protocols import StreamSerializer, T
+from relic.sga.core._core import StorageType
+from relic.sga.core.errors import MD5MismatchError
+from relic.sga.core.protocols import StreamSerializer, T
 
 
 class TocHeaderSerializer(StreamSerializer[TocHeader]):

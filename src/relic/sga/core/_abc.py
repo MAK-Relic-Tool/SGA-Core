@@ -19,10 +19,16 @@ from typing import (
 
 from typing_extensions import TypeAlias
 
-from relic.sga import protocols as p
-from relic.sga._core import StorageType
-from relic.sga.errors import DecompressedSizeMismatch
-from relic.sga.protocols import IOChild, IOPathable, IOWalkable, IOContainer, IOWalk
+from relic.sga.core import protocols as p
+from relic.sga.core._core import StorageType
+from relic.sga.core.errors import DecompressedSizeMismatch
+from relic.sga.core.protocols import (
+    IOChild,
+    IOPathable,
+    IOWalkable,
+    IOContainer,
+    IOWalk,
+)
 
 
 def _build_io_path(name: str, parent: Optional[Any]) -> PurePath:
