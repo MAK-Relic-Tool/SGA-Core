@@ -34,4 +34,4 @@ jobs:
         pip install mypy
     - name: Run mypy
       run: |
-        mypy --config-file mypy.ini --namespace-packages -p relic.sga
+        mypy --config-file mypy.ini --namespace-packages -p relic.sga.core
