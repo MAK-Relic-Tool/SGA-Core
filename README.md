@@ -10,8 +10,10 @@
 [![MyPy](https://github.com/ModernMAK/Relic-Tool-SGA-Core/actions/workflows/mypy.yml/badge.svg)](https://github.com/ModernMAK/Relic-Tool-SGA-Core/actions/workflows/mypy.yml)
 #### Disclaimer
 Not affiliated with Sega, Relic Entertainment, or THQ.
-#### Description
-A library for reading & writing Relic's SGA archive files.
+## Developer Package
+This is a developer package; used internally by other Relic-Tool packages.
+
+Are you looking for the [SGA Sub-Tool](https://github.com/ModernMAK/Relic-Tool-SGA), or the [Relic Tool](https://github.com/ModernMAK/Relic-Tool)?
 
 ## Installation (Pip)
 ### Installing from PyPI (Recommended)
@@ -23,14 +25,3 @@ For more information, see [pip VCS support](https://pip.pypa.io/en/stable/topics
 ```
 pip install git+https://github.com/ModernMAK/Relic-Tool-SGA-Core
 ```
-
-## Usage
-Via importing the python package, or running the relic from the command line.<br>
-### As a Python Library
-*Details pending*
-
-### As a Command Line Tool
-*Details pending*
-
-## Format Specifications
-I've compiled what I've learned on the [Wiki](https://github.com/ModernMAK/Relic-Tool-SGA-Core/wiki).
