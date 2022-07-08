@@ -17,7 +17,7 @@ from typing import (
     Generator,
 )
 
-from typing_extensions import TypeAlias
+from relic.core.typeshed import TypeAlias
 
 from relic.sga.core import protocols as p
 from relic.sga.core._core import StorageType

@@ -15,7 +15,7 @@ from typing import (
     Sequence,
     Tuple,
 )
-from typing_extensions import TypeAlias
+from relic.core.typeshed import TypeAlias
 
 TParent = TypeVar("TParent")
 TParent_co = TypeVar("TParent_co", covariant=True)
