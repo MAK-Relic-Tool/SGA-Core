@@ -4,7 +4,7 @@ Error definitions for the SGA API
 from typing import List, Optional
 
 from relic.core.errors import MismatchError
-from relic.sga.core._core import Version
+from relic.sga.core.definitions import Version
 
 
 class VersionMismatchError(MismatchError[Version]):

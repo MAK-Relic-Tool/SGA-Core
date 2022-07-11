@@ -110,13 +110,13 @@ class IOWalkable(Protocol[TParent_co, TFolder_co, TFile_co]):
         raise NotImplementedError
 
 
-class ArchiveIO(Protocol[TArchive]):
+class ArchiveSerializer(Protocol[TArchive]):
     """
     Represents a class which allows reading/writing an SGA Archive.
     """
 
     def read(
-        self, stream: BinaryIO, lazy: bool = False, decompress: bool = True
+            self, stream: BinaryIO, lazy: bool = False, decompress: bool = True, skip_magic_and_version: bool = False
     ) -> TArchive:
         """
         Converts an archive from its binary representation.

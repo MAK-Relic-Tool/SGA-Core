@@ -14,20 +14,20 @@ from typing import (
     TypeVar,
     Any,
     Union,
-    Generator,
+    Generator, Callable,
 )
 
 from relic.core.typeshed import TypeAlias
 
 from relic.sga.core import protocols as p
-from relic.sga.core._core import StorageType
-from relic.sga.core.errors import DecompressedSizeMismatch
+from relic.sga.core.definitions import StorageType, MagicWord, Version
+from relic.sga.core.errors import DecompressedSizeMismatch, VersionMismatchError
 from relic.sga.core.protocols import (
     IOChild,
     IOPathable,
     IOWalkable,
     IOContainer,
-    IOWalk,
+    IOWalk, StreamSerializer,
 )
 
 
@@ -76,7 +76,7 @@ class FolderDef:
 
 
 @dataclass
-class FileDefABC:
+class FileDef:
     name_pos: int
     data_pos: int
     length_on_disk: int
@@ -218,19 +218,6 @@ class Archive(Generic[TMeta, TFileMeta]):
                 yield inner_walk
 
 
-TArchive = TypeVar("TArchive", bound=Archive[Any, Any])
-
-
-class ArchiveSerializer(p.ArchiveIO[TArchive]):
-    def read(
-        self, stream: BinaryIO, lazy: bool = False, decompress: bool = True
-    ) -> TArchive:
-        raise NotImplementedError
-
-    def write(self, stream: BinaryIO, archive: TArchive) -> int:
-        raise NotImplementedError
-
-
 @dataclass
 class TocHeader:
     drive_info: Tuple[int, int]
@@ -245,3 +232,4 @@ class ArchivePtrs:
     header_size: int
     data_pos: int
     data_size: Optional[int] = None
+

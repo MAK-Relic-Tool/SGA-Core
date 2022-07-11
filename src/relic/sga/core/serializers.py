@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from io import BytesIO
 from typing import (
     BinaryIO,
     List,
@@ -11,14 +12,14 @@ from typing import (
     Tuple,
     Iterable,
     TypeVar,
-    Union,
+    Union, Any, Generic,
 )
 
 from serialization_tools.size import KiB
 from serialization_tools.structx import Struct
 
-from relic.sga.core import _abc
-from relic.sga.core._abc import (
+from relic.sga.core import abstract, protocols
+from relic.sga.core.abstract import (
     DriveDef,
     FolderDef,
     FileLazyInfo,
@@ -27,10 +28,10 @@ from relic.sga.core._abc import (
     ArchivePtrs,
     File,
     Folder,
-    Drive,
+    Drive, FileDef, Archive,
 )
-from relic.sga.core._core import StorageType
-from relic.sga.core.errors import MD5MismatchError
+from relic.sga.core.definitions import StorageType, Version, MagicWord
+from relic.sga.core.errors import MD5MismatchError, VersionMismatchError
 from relic.sga.core.protocols import StreamSerializer, T
 
 
@@ -146,17 +147,22 @@ class FolderDefSerializer(StreamSerializer[FolderDef]):
         return packed
 
 
-TFileDef = TypeVar("TFileDef", bound=_abc.FileDefABC)
-BuildFileMeta = Callable[[TFileDef], TFileMeta]
+TMetadata = TypeVar("TMetadata")
+TMetaHeader = TypeVar("TMetaHeader")
+TMetaFooter = TypeVar("TMetaFooter")
+TFileDef = TypeVar("TFileDef", bound=FileDef)
+BuildFileMetaFunc = Callable[[TFileDef], TFileMeta]
+AssembleMetaFunc = Callable[[BinaryIO, Optional[TMetaHeader], Optional[TMetaFooter]], Tuple[str, TMetadata, ArchivePtrs]]
+DisassembleMetaFunc = Callable[[str, TMetadata, ArchivePtrs], Tuple[Optional[TMetaHeader], Optional[TMetaFooter]]]
 
 
 def assemble_files(
-    file_defs: List[TFileDef],
-    names: Dict[int, str],
-    data_pos: int,
-    stream: BinaryIO,
-    build_file_meta: BuildFileMeta[TFileDef, TFileMeta],
-    decompress: bool = False,
+        file_defs: List[TFileDef],
+        names: Dict[int, str],
+        data_pos: int,
+        stream: BinaryIO,
+        build_file_meta: BuildFileMetaFunc[TFileDef, TFileMeta],
+        decompress: bool = False,
 ) -> List[File[TFileMeta]]:
     files: List[File[TFileMeta]] = []
     for file_def in file_defs:
@@ -183,29 +189,29 @@ def assemble_files(
 
 
 def assemble_folders(
-    folder_defs: List[FolderDef],
-    names: Dict[int, str],
-    files: List[File[TFileMeta]],
-    file_offset: int = 0,
-    folder_offset: int = 0,
+        folder_defs: List[FolderDef],
+        names: Dict[int, str],
+        files: List[File[TFileMeta]],
+        file_offset: int = 0,
+        folder_offset: int = 0,
 ) -> List[Folder[TFileMeta]]:
     folders: List[Folder[TFileMeta]] = []
     for folder_def in folder_defs:
         folder_name = names[folder_def.name_pos]
         sub_files = files[
-            folder_def.file_range[0]
-            - file_offset : folder_def.file_range[1]
-            - file_offset
-        ]
+                    folder_def.file_range[0]
+                    - file_offset: folder_def.file_range[1]
+                                   - file_offset
+                    ]
         folder = Folder(folder_name, [], sub_files, None)
         folders.append(folder)
 
     for folder_def, folder in zip(folder_defs, folders):
         folder.sub_folders = folders[
-            folder_def.folder_range[0]
-            - folder_offset : folder_def.folder_range[1]
-            - folder_offset
-        ]
+                             folder_def.folder_range[0]
+                             - folder_offset: folder_def.folder_range[1]
+                                              - folder_offset
+                             ]
 
     for folder in folders:
         _apply_self_as_parent(folder)
@@ -214,26 +220,26 @@ def assemble_folders(
 
 
 def assemble_io_from_defs(
-    drive_defs: List[DriveDef],
-    folder_defs: List[FolderDef],
-    file_defs: List[TFileDef],
-    names: Dict[int, str],
-    data_pos: int,
-    stream: BinaryIO,
-    build_file_meta: BuildFileMeta[TFileDef, TFileMeta],
-    decompress: bool = False,
+        drive_defs: List[DriveDef],
+        folder_defs: List[FolderDef],
+        file_defs: List[TFileDef],
+        names: Dict[int, str],
+        data_pos: int,
+        stream: BinaryIO,
+        build_file_meta: BuildFileMetaFunc[TFileDef, TFileMeta],
+        decompress: bool = False,
 ) -> Tuple[List[Drive[TFileMeta]], List[File[TFileMeta]]]:
     all_files: List[File[TFileMeta]] = []
     drives: List[Drive[TFileMeta]] = []
     for drive_def in drive_defs:
-        local_file_defs = file_defs[drive_def.file_range[0] : drive_def.file_range[1]]
+        local_file_defs = file_defs[drive_def.file_range[0]: drive_def.file_range[1]]
         local_files = assemble_files(
             local_file_defs, names, data_pos, stream, build_file_meta, decompress
         )
 
         local_folder_defs = folder_defs[
-            drive_def.folder_range[0] : drive_def.folder_range[1]
-        ]
+                            drive_def.folder_range[0]: drive_def.folder_range[1]
+                            ]
         local_folders = assemble_folders(
             local_folder_defs,
             names,
@@ -243,7 +249,7 @@ def assemble_io_from_defs(
         )
 
         root_folder = (
-            drive_def.root_folder - drive_def.folder_range[0]
+                drive_def.root_folder - drive_def.folder_range[0]
         )  # make root folder relative to our folder slice
         drive_folder = local_folders[root_folder]
         drive = Drive(
@@ -260,7 +266,7 @@ def assemble_io_from_defs(
 
 
 def _apply_self_as_parent(
-    collection: Union[Folder[TFileMeta], Drive[TFileMeta]]
+        collection: Union[Folder[TFileMeta], Drive[TFileMeta]]
 ) -> None:
     for folder in collection.sub_folders:
         folder.parent = collection
@@ -269,22 +275,22 @@ def _apply_self_as_parent(
 
 
 def _unpack_helper(
-    stream: BinaryIO,
-    toc_info: Tuple[int, int],
-    header_pos: int,
-    serializer: StreamSerializer[T],
+        stream: BinaryIO,
+        toc_info: Tuple[int, int],
+        header_pos: int,
+        serializer: StreamSerializer[T],
 ) -> List[T]:
     stream.seek(header_pos + toc_info[0])
     return [serializer.unpack(stream) for _ in range(toc_info[1])]
 
 
 def read_toc_definitions(
-    stream: BinaryIO,
-    toc: TocHeader,
-    header_pos: int,
-    drive_serializer: StreamSerializer[DriveDef],
-    folder_serializer: StreamSerializer[FolderDef],
-    file_serializer: StreamSerializer[TFileDef],
+        stream: BinaryIO,
+        toc: TocHeader,
+        header_pos: int,
+        drive_serializer: StreamSerializer[DriveDef],
+        folder_serializer: StreamSerializer[FolderDef],
+        file_serializer: StreamSerializer[TFileDef],
 ) -> Tuple[List[DriveDef], List[FolderDef], List[TFileDef]]:
     drives = _unpack_helper(stream, toc.drive_info, header_pos, drive_serializer)
     folders = _unpack_helper(stream, toc.folder_info, header_pos, folder_serializer)
@@ -293,7 +299,7 @@ def read_toc_definitions(
 
 
 def read_toc_names_as_count(
-    stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int, buffer_size: int = 256
+        stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int, buffer_size: int = 256
 ) -> Dict[int, str]:
     NULL = 0
     NULL_CHAR = b"\0"
@@ -331,7 +337,7 @@ def read_toc_names_as_count(
 
 
 def _read_toc_names_as_size(
-    stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int
+        stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int
 ) -> Dict[int, str]:
     stream.seek(header_pos + toc_info[0])
     name_buffer = stream.read(toc_info[1])
@@ -345,7 +351,7 @@ def _read_toc_names_as_size(
 
 
 def _chunked_read(
-    stream: BinaryIO, size: Optional[int] = None, chunk_size: Optional[int] = None
+        stream: BinaryIO, size: Optional[int] = None, chunk_size: Optional[int] = None
 ) -> Iterable[bytes]:
     if size is None and chunk_size is None:
         yield stream.read()
@@ -395,15 +401,15 @@ class Md5ChecksumHelper:
 
 
 def read_toc(
-    stream: BinaryIO,
-    toc_header: TocHeader,
-    ptrs: ArchivePtrs,
-    drive_def: StreamSerializer[DriveDef],
-    folder_def: StreamSerializer[FolderDef],
-    file_def: StreamSerializer[TFileDef],
-    decompress: bool,
-    build_file_meta: BuildFileMeta[TFileDef, TFileMeta],
-    name_toc_is_count: bool = True,
+        stream: BinaryIO,
+        toc_header: TocHeader,
+        ptrs: ArchivePtrs,
+        drive_def: StreamSerializer[DriveDef],
+        folder_def: StreamSerializer[FolderDef],
+        file_def: StreamSerializer[TFileDef],
+        decompress: bool,
+        build_file_meta: BuildFileMetaFunc[TFileDef, TFileMeta],
+        name_toc_is_count: bool = True,
 ) -> Tuple[List[Drive[TFileMeta]], List[File[TFileMeta]]]:
     drive_defs, folder_defs, file_defs = read_toc_definitions(
         stream, toc_header, ptrs.header_pos, drive_def, folder_def, file_def
@@ -425,6 +431,15 @@ def read_toc(
     )
     return drives, files
 
+def write_toc(
+        toc_stream:BinaryIO,
+        data_stream:BinaryIO,
+        name_stream:BinaryIO,
+        archive:Archive[Any,TFileMeta],
+        name_lookup:Dict[str,int],
+        name_stream_offset:int = 0, # SHould always be 0; but defensive programming
+)
+
 
 def load_lazy_data(files: List[File[TFileMeta]]) -> None:
     for file in files:
@@ -433,3 +448,77 @@ def load_lazy_data(files: List[File[TFileMeta]]) -> None:
             raise Exception("API read files, but failed to create lazy info!")
         file.data = lazy_info.read()  # decompress should use cached value
         file._lazy_info = None
+
+
+class ArchiveSerializer(protocols.ArchiveSerializer[Archive[TMetadata, TFileMeta]], Generic[TMetadata, TFileMeta, TFileDef]):
+    # Would use a dataclass; but I also want to be able to override defaults in parent dataclasses
+    def __init__(
+            self,
+            version: Version,
+            toc_serializer: StreamSerializer[TocHeader],
+            meta_header_serializer: Optional[StreamSerializer[TMetaHeader]],
+            meta_footer_serializer: Optional[StreamSerializer[TMetaFooter]],
+            name_toc_is_count: bool,
+            drive_serializer: StreamSerializer[DriveDef],
+            folder_serializer: StreamSerializer[FolderDef],
+            file_serializer: StreamSerializer[TFileDef],
+            assemble_meta: AssembleMetaFunc[TMetaHeader, TMetaFooter],
+            disassemble_meta: DisassembleMetaFunc[TMetaHeader, TMetaFooter],
+            build_file_meta: BuildFileMetaFunc[TFileDef, TFileMeta]
+    ):
+        self.version = version
+        self.toc_serializer = toc_serializer
+        self.meta_header_serializer = meta_header_serializer
+        self.meta_footer_serializer = meta_footer_serializer
+        self.name_toc_is_count = name_toc_is_count
+        self.drive_serializer = drive_serializer
+        self.folder_serializer = folder_serializer
+        self.file_serializer = file_serializer
+        self.assemble_meta = assemble_meta
+        self.disassemble_meta = disassemble_meta
+        self.build_file_meta = build_file_meta
+
+    def read(self, stream: BinaryIO, lazy: bool = False, decompress: bool = True, skip_magic_and_version=False) -> Archive[TMetadata, TFileMeta]:
+        # Magic & Version; skippable so that we can check for a valid file and read the version elsewhere
+        if not skip_magic_and_version:
+            if not MagicWord.check_magic_word(stream):
+                raise NotImplementedError
+            stream_version = Version.unpack(stream)
+            if stream_version != self.version:
+                raise VersionMismatchError(stream_version, self.version)
+
+        meta_header = self.meta_header_serializer.unpack(stream) if self.meta_header_serializer else None
+        toc_header = self.toc_serializer.unpack(stream)
+        meta_footer = self.meta_footer_serializer.unpack(stream) if self.meta_footer_serializer else None
+        name, metadata, ptrs = self.assemble_meta(meta_header, meta_footer)
+
+        drives, files = read_toc(
+            stream=stream,
+            toc_header=toc_header,
+            ptrs=ptrs,
+            drive_def=self.drive_serializer,
+            file_def=self.file_serializer,
+            folder_def=self.folder_serializer,
+            decompress=decompress,
+            build_file_meta=self.build_file_meta,
+            name_toc_is_count=self.name_toc_is_count,
+        )
+
+        if not lazy:
+            load_lazy_data(files)
+
+        return Archive(name, metadata, drives)
+
+    def write(self, stream: BinaryIO, archive: Archive[TMetadata, TFileMeta]) -> int:
+        written: int = MagicWord.write_magic_word(stream)
+        written += self.version.pack(stream)
+        with BytesIO(), BytesIO(), BytesIO as (data_stream, toc_stream, name_stream):
+            write_toc(
+                archive=archive,
+                data_stream=data_stream,
+                toc_stream=toc_stream,
+                name_stream=name_stream
+            )
+
+
+        raise NotImplementedError
