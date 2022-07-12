@@ -246,4 +246,4 @@ class ArchivePtrs:
 
     @classmethod
     def default(cls):
-        return cls(0,0,0,0)
+        return cls(0, 0, 0, 0)
