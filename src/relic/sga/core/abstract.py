@@ -52,13 +52,15 @@ class FileLazyInfo:
         decompress = self.decompress if decompress is None else decompress
         jump_back = self.stream.tell()
         self.stream.seek(self.jump_to)
-        buffer = self.stream.read(self.packed_size)
+        in_buffer = self.stream.read(self.packed_size)
         if decompress and self.packed_size != self.unpacked_size:
-            buffer = zlib.decompress(buffer)
-            if len(buffer) != self.unpacked_size:
-                raise DecompressedSizeMismatch(len(buffer), self.unpacked_size)
+            out_buffer = zlib.decompress(in_buffer)
+            if len(out_buffer) != self.unpacked_size:
+                raise DecompressedSizeMismatch(len(out_buffer), self.unpacked_size)
+        else:
+            out_buffer = in_buffer
         self.stream.seek(jump_back)
-        return buffer
+        return out_buffer
 
 
 @dataclass
@@ -109,7 +111,6 @@ class File(
     metadata: TFileMeta
     parent: Optional[Drive[TFileMeta] | Folder[TFileMeta]] = None
     _lazy_info: Optional[FileLazyInfo] = None
-    _data_uncompressed_size: Optional[int] = None
 
     @property
     def data(self) -> bytes:
@@ -118,7 +119,6 @@ class File(
                 raise TypeError("Data was not loaded!")
             self._data = self._lazy_info.read()
             self._lazy_info = None
-            self._data_uncompressed_size
         return self._data
 
     @data.setter
@@ -233,7 +233,7 @@ class TocBlock:
     @classmethod
     @property
     def EMPTY(cls) -> TocBlock:
-        null_pair = (-1, -1)
+        null_pair = (0, 0)
         return cls(null_pair, null_pair, null_pair, null_pair)
 
 
@@ -243,3 +243,7 @@ class ArchivePtrs:
     header_size: int
     data_pos: int
     data_size: Optional[int] = None
+
+    @classmethod
+    def default(cls):
+        return cls(0,0,0,0)

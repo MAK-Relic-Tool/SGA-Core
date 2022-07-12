@@ -4,6 +4,7 @@ import hashlib
 import zlib
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path, PurePath
 from typing import (
     BinaryIO,
     List,
@@ -211,15 +212,15 @@ class IOAssembler:
     lazy: bool = False
 
     def read_toc_part(
-        self,
-        toc_info: Tuple[int, int],
-        serializer: StreamSerializer[T],
+            self,
+            toc_info: Tuple[int, int],
+            serializer: StreamSerializer[T],
     ) -> List[T]:
         self.stream.seek(self.ptrs.header_pos + toc_info[0])
         return [serializer.unpack(self.stream) for _ in range(toc_info[1])]
 
     def read_toc(
-        self,
+            self,
     ) -> Tuple[List[DriveDef], List[FolderDef], List[TFileDef], Dict[int, str]]:
         drives = self.read_toc_part(
             self.toc.drive_info, self.toc_serialization_info.drive
@@ -240,16 +241,16 @@ class IOAssembler:
         return drives, folders, files, names
 
     def assemble_file(
-        self, file_def: TFileDef, names: Dict[int, str]
+            self, file_def: TFileDef, names: Dict[int, str]
     ) -> File[TFileMeta]:
         name = names[file_def.name_pos]
         metadata: TFileMeta = self.build_file_meta(file_def)
         lazy_info = FileLazyInfo(
-            self.ptrs.data_pos + file_def.data_pos,
-            file_def.length_in_archive,
-            file_def.length_on_disk,
-            self.stream,
-            self.decompress_files,
+            jump_to=self.ptrs.data_pos + file_def.data_pos,
+            packed_size=file_def.length_in_archive,
+            unpacked_size=file_def.length_on_disk,
+            stream=self.stream,
+            decompress=self.decompress_files,
         )
         file_compressed = file_def.storage_type != StorageType.STORE
         file = File(
@@ -265,13 +266,15 @@ class IOAssembler:
         return file
 
     def assemble_folder(
-        self,
-        folder_def: FolderDef,
-        files: List[File[TFileMeta]],
-        file_offset: int,
-        names: Dict[int, str],
+            self,
+            folder_def: FolderDef,
+            files: List[File[TFileMeta]],
+            file_offset: int,
+            names: Dict[int, str],
     ) -> Folder[TFileMeta]:
-        folder_name = names[folder_def.name_pos]
+        raw_folder_name = names[folder_def.name_pos]
+        folder_name_as_path = PurePath(raw_folder_name)
+        folder_name = folder_name_as_path.parts[-1] if len(folder_name_as_path.parts) > 0 else raw_folder_name
         subfile_start = folder_def.file_range[0] - file_offset
         subfile_end = folder_def.file_range[1] - file_offset
         sub_files = files[subfile_start:subfile_end]
@@ -280,10 +283,10 @@ class IOAssembler:
         # folders.append(folder)
 
     def assemble_subfolder(
-        self,
-        folder_defs: List[FolderDef],
-        folders: List[Folder[TFileMeta]],
-        folder_offset: int,
+            self,
+            folder_defs: List[FolderDef],
+            folders: List[Folder[TFileMeta]],
+            folder_offset: int,
     ) -> None:
         for folder_def, folder in zip(folder_defs, folders):
             subfolder_start = folder_def.folder_range[0] - folder_offset
@@ -294,18 +297,18 @@ class IOAssembler:
             _apply_self_as_parent(folder)
 
     def assemble_drive(
-        self,
-        drive_def: DriveDef,
-        folder_defs: List[FolderDef],
-        file_defs: List[FileDef],
-        names: Dict[int, str],
+            self,
+            drive_def: DriveDef,
+            folder_defs: List[FolderDef],
+            file_defs: List[FileDef],
+            names: Dict[int, str],
     ) -> Drive[TFileMeta]:
-        local_file_defs = file_defs[drive_def.file_range[0] : drive_def.file_range[1]]
+        local_file_defs = file_defs[drive_def.file_range[0]: drive_def.file_range[1]]
         local_files = [self.assemble_file(f_def, names) for f_def in local_file_defs]
 
         local_folder_defs = folder_defs[
-            drive_def.folder_range[0] : drive_def.folder_range[1]
-        ]
+                            drive_def.folder_range[0]: drive_def.folder_range[1]
+                            ]
         local_folders = [
             self.assemble_folder(
                 folder_def, local_files, drive_def.file_range[0], names
@@ -336,13 +339,13 @@ class IOAssembler:
 @dataclass
 class IODisassembler:
     def __init__(
-        self,
-        drives: List[Drive[TFileMeta]],
-        toc_stream: BinaryIO,
-        data_stream: BinaryIO,
-        name_stream: BinaryIO,
-        toc_serialization_info: TOCSerializationInfo,
-        meta2def: DisassembleFileMetaFunc[TFileMeta, TFileDef],
+            self,
+            drives: List[Drive[TFileMeta]],
+            toc_stream: BinaryIO,
+            data_stream: BinaryIO,
+            name_stream: BinaryIO,
+            toc_serialization_info: TOCSerializationInfo,
+            meta2def: DisassembleFileMetaFunc[TFileMeta, TFileDef],
     ):
         self.drives = drives
         self.toc_stream = toc_stream
@@ -387,7 +390,7 @@ class IODisassembler:
         return subfile_start, subfile_end
 
     def flatten_folder_collection(
-        self, folders: List[Folder[TFileMeta]]
+            self, folders: List[Folder[TFileMeta]]
     ) -> Tuple[int, int]:
         # Create temporary None folders to ensure a continuous range of child folders; BEFORE entering any child folders
         subfolder_start = len(self.flat_folders)
@@ -397,7 +400,7 @@ class IODisassembler:
         # Enter subfolders, and add them to the flat array
         subfolder_defs = [self.disassemble_folder(folder) for folder in folders]
         self.flat_folders[
-            subfolder_start:subfolder_end
+        subfolder_start:subfolder_end
         ] = subfolder_defs  # copy to array
         return subfolder_start, subfolder_end
 
@@ -492,7 +495,7 @@ class IODisassembler:
 
 
 def _apply_self_as_parent(
-    collection: Union[Folder[TFileMeta], Drive[TFileMeta]]
+        collection: Union[Folder[TFileMeta], Drive[TFileMeta]]
 ) -> None:
     for folder in collection.sub_folders:
         folder.parent = collection
@@ -501,7 +504,7 @@ def _apply_self_as_parent(
 
 
 def read_toc_names_as_count(
-    stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int, buffer_size: int = 256
+        stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int, buffer_size: int = 256
 ) -> Dict[int, str]:
     NULL = 0
     NULL_CHAR = b"\0"
@@ -539,7 +542,7 @@ def read_toc_names_as_count(
 
 
 def _read_toc_names_as_size(
-    stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int
+        stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int
 ) -> Dict[int, str]:
     stream.seek(header_pos + toc_info[0])
     name_buffer = stream.read(toc_info[1])
@@ -553,7 +556,7 @@ def _read_toc_names_as_size(
 
 
 def _chunked_read(
-    stream: BinaryIO, size: Optional[int] = None, chunk_size: Optional[int] = None
+        stream: BinaryIO, size: Optional[int] = None, chunk_size: Optional[int] = None
 ) -> Iterable[bytes]:
     if size is None and chunk_size is None:
         yield stream.read()
@@ -577,10 +580,10 @@ def _chunked_read(
 
 
 def _chunked_copy(
-    input: BinaryIO,
-    output: BinaryIO,
-    size: Optional[int] = None,
-    chunk_size: Optional[int] = None,
+        input: BinaryIO,
+        output: BinaryIO,
+        size: Optional[int] = None,
+        chunk_size: Optional[int] = None,
 ) -> None:
     for chunk in _chunked_read(input, size, chunk_size):
         output.write(chunk)
@@ -622,7 +625,7 @@ def load_lazy_data(file: File[TFileMeta]) -> None:
 
 def _fix_toc(toc: TocBlock, cur_toc_start: int, desired_toc_start: int):
     def _fix(info: Tuple[int, int]):
-        return info[0] + (desired_toc_start - cur_toc_start), info[1]
+        return info[0] + (cur_toc_start - desired_toc_start), info[1]
 
     toc.folder_info = _fix(toc.folder_info)
     toc.file_info = _fix(toc.file_info)
@@ -632,21 +635,22 @@ def _fix_toc(toc: TocBlock, cur_toc_start: int, desired_toc_start: int):
 
 class ArchiveSerializer(
     protocols.ArchiveSerializer[Archive[TMetadata, TFileMeta]],
-    Generic[TMetadata, TFileMeta, TFileDef],
+    Generic[TMetadata, TFileMeta, TFileDef, TTocMetaBlock],
 ):
     # Would use a dataclass; but I also want to be able to override defaults in parent dataclasses
     def __init__(
-        self,
-        version: Version,
-        meta_serializer: StreamSerializer[MetaBlock],
-        toc_serializer: StreamSerializer[TocBlock],
-        toc_meta_serializer: Optional[StreamSerializer[TTocMetaBlock]],
-        toc_serialization_info: TOCSerializationInfo,
-        assemble_meta: AssembleMetaFunc[MetaBlock, TMetadata, TTocMetaBlock],
-        disassemble_meta: DisassembleMetaFunc[TMetadata, MetaBlock, TTocMetaBlock],
-        build_file_meta: AssembleFileMetaFunc[TFileDef, TFileMeta],
-        gen_empty_meta: Callable[[], TMetadata],
-        finalize_meta: Callable[[BinaryIO, TMetadata], None],
+            self,
+            version: Version,
+            meta_serializer: StreamSerializer[MetaBlock],
+            toc_serializer: StreamSerializer[TocBlock],
+            toc_meta_serializer: Optional[StreamSerializer[TTocMetaBlock]],
+            toc_serialization_info: TOCSerializationInfo,
+            assemble_meta: AssembleMetaFunc[MetaBlock, TTocMetaBlock, TMetadata],
+            disassemble_meta: DisassembleMetaFunc[TMetadata, MetaBlock, TTocMetaBlock],
+            build_file_meta: AssembleFileMetaFunc[TFileDef, TFileMeta],
+            gen_empty_meta: Callable[[], TMetadata],
+            finalize_meta: Callable[[BinaryIO, TMetadata], None],
+            meta2def: Callable[[TFileMeta], FileDef]
     ):
         self.version = version
         self.meta_serializer = meta_serializer
@@ -658,23 +662,25 @@ class ArchiveSerializer(
         self.build_file_meta = build_file_meta
         self.gen_empty_meta = gen_empty_meta
         self.finalize_meta = finalize_meta
+        self.meta2def = meta2def
 
     def read(
-        self,
-        stream: BinaryIO,
-        lazy: bool = False,
-        decompress: bool = True,
-        skip_magic_and_version=False,
+            self,
+            stream: BinaryIO,
+            lazy: bool = False,
+            decompress: bool = True,
+            skip_magic_and_version=False,
     ) -> Archive[TMetadata, TFileMeta]:
         # Magic & Version; skippable so that we can check for a valid file and read the version elsewhere
         if not skip_magic_and_version:
-            if not MagicWord.check_magic_word(stream):
+            if not MagicWord.check_magic_word(stream, advance=True):
                 raise NotImplementedError
             stream_version = Version.unpack(stream)
             if stream_version != self.version:
                 raise VersionMismatchError(stream_version, self.version)
 
         meta_block = self.meta_serializer.unpack(stream)
+        # TODO seek to toc header
         toc_block = self.toc_serializer.unpack(stream)
         toc_meta_block = (
             self.toc_meta_serializer.unpack(stream)
@@ -699,72 +705,71 @@ class ArchiveSerializer(
         return Archive(name, metadata, drives)
 
     def write(self, stream: BinaryIO, archive: Archive[TMetadata, TFileMeta]) -> int:
-        start = stream.tell()
-        MagicWord.write_magic_word(stream)
-        self.version.pack(stream)
-        with BytesIO() as data_stream:
-            with BytesIO() as toc_stream:
-                with BytesIO() as name_stream:
-                    disassembler = IODisassembler(
-                        drives=archive.drives,
-                        toc_stream=toc_stream,
-                        data_stream=data_stream,
-                        name_stream=name_stream,
-                        toc_serialization_info=self.toc_serialization_info,
-                        meta2def=None,
-                    )
+        with BytesIO() as temp_stream:
+            MagicWord.write_magic_word(temp_stream)
+            self.version.pack(temp_stream)
+            with BytesIO() as data_stream:
+                with BytesIO() as toc_stream:
+                    with BytesIO() as name_stream:
+                        disassembler = IODisassembler(
+                            drives=archive.drives,
+                            toc_stream=toc_stream,
+                            data_stream=data_stream,
+                            name_stream=name_stream,
+                            toc_serialization_info=self.toc_serialization_info,
+                            meta2def=self.meta2def,
+                        )
 
-                    partial_toc = disassembler.disassemble()
+                        partial_toc = disassembler.disassemble()
 
-                    partial_meta, toc_meta = self.disassemble_meta(
-                        stream, archive.metadata
-                    )
+                        partial_meta, toc_meta = self.disassemble_meta(
+                            temp_stream, archive.metadata
+                        )
 
-                    meta_writeback = (
-                        stream.tell()
-                    )  # we need to come back with the correct data
-                    empty_meta = self.gen_empty_meta()
-                    self.meta_serializer.pack(stream, empty_meta)
+                        meta_writeback = (
+                            temp_stream.tell()
+                        )  # we need to come back with the correct data
+                        empty_meta = self.gen_empty_meta()
+                        self.meta_serializer.pack(temp_stream, empty_meta)
 
-                    toc_start = (
-                        stream.tell()
-                    )  # the start of the toc stream in the current stream
-                    toc_writeback = toc_start
-                    self.toc_serializer.pack(stream, TocBlock.EMPTY)
+                        toc_start = (
+                            temp_stream.tell()
+                        )  # the start of the toc stream in the current stream
+                        toc_writeback = toc_start
+                        self.toc_serializer.pack(temp_stream, TocBlock.EMPTY)
 
-                    if self.toc_meta_serializer:
-                        self.toc_meta_serializer.pack(stream, toc_meta)
+                        if self.toc_meta_serializer:
+                            self.toc_meta_serializer.pack(temp_stream, toc_meta)
 
-                    toc_rel_start = stream.tell()
-                    toc_stream.seek(0)
-                    _chunked_copy(toc_stream, stream, chunk_size=64 * KiB)
-                    toc_end = stream.tell()  # The end of the TOC block;
-                    toc_size = toc_end - toc_start
+                        toc_rel_start = temp_stream.tell()
+                        toc_stream.seek(0)
+                        _chunked_copy(toc_stream, temp_stream, chunk_size=64 * KiB)
+                        toc_end = temp_stream.tell()  # The end of the TOC block;
+                        toc_size = toc_end - toc_start
 
-                    data_start = stream.tell()
-                    data_stream.seek(0)
-                    _chunked_copy(toc_stream, stream, chunk_size=1 * MiB)
-                    data_size = data_stream.tell()
+                        data_start = temp_stream.tell()
+                        data_stream.seek(0)
+                        _chunked_copy(data_stream, temp_stream, chunk_size=1 * MiB)
+                        data_size = data_stream.tell()
 
-                    partial_meta.ptrs = ArchivePtrs(
-                        toc_start, toc_size, data_start, data_size
-                    )
-                    _fix_toc(partial_toc, toc_rel_start, toc_start)
+                        partial_meta.name = archive.name
+                        partial_meta.ptrs = ArchivePtrs(
+                            toc_start, toc_size, data_start, data_size
+                        )
+                        _fix_toc(partial_toc, toc_rel_start, toc_start)
 
-                    end = stream.tell()  # for safety, preserve the end of the stream
+                        temp_stream.seek(toc_writeback)
+                        self.toc_serializer.pack(temp_stream, partial_toc)
 
-                    stream.seek(toc_writeback)
-                    self.toc_serializer.pack(stream, partial_toc)
+                        if self.finalize_meta is not None:
+                            self.finalize_meta(temp_stream, partial_meta)
 
-                    if self.finalize_meta is not None:
-                        self.finalize_meta(stream, partial_meta)
+                        temp_stream.seek(meta_writeback)
+                        self.meta_serializer.pack(temp_stream, partial_meta)
 
-                    stream.seek(meta_writeback)
-                    self.meta_serializer.pack(stream, partial_meta)
-
-                    stream.seek(end)
-                    return end - start
-
+            temp_stream.seek(0)
+            _chunked_copy(temp_stream, stream, chunk_size=16 * MiB)
+            return temp_stream.tell()
 
 #   Archives have 6 blocks:
 #       MetaBlock
