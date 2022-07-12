@@ -682,7 +682,7 @@ class ArchiveSerializer(
                 raise VersionMismatchError(stream_version, self.version)
 
         meta_block = self.meta_serializer.unpack(stream)
-        # TODO seek to toc header
+        stream.seek(meta_block.ptrs.header_pos)
         toc_block = self.toc_serializer.unpack(stream)
         toc_meta_block = (
             self.toc_meta_serializer.unpack(stream)
