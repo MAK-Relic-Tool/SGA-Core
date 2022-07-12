@@ -491,7 +491,8 @@ class IODisassembler(Generic[TFileMeta, TFileDef]):
 
     def disassemble(self) -> TocBlock:
         for drive in self.drives:
-            self.disassemble_drive(drive)
+            drive_def = self.disassemble_drive(drive)
+            self.flat_drives.append(drive_def)
 
         return self.write_toc()
 
