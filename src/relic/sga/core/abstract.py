@@ -231,8 +231,7 @@ class TocBlock:
     name_info: Tuple[int, int]
 
     @classmethod
-    @property
-    def EMPTY(cls) -> TocBlock:
+    def default(cls) -> TocBlock:
         null_pair = (0, 0)
         return cls(null_pair, null_pair, null_pair, null_pair)
 
@@ -245,5 +244,5 @@ class ArchivePtrs:
     data_size: Optional[int] = None
 
     @classmethod
-    def default(cls):
+    def default(cls) -> ArchivePtrs:
         return cls(0, 0, 0, 0)

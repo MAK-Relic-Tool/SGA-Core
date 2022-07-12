@@ -165,7 +165,7 @@ TTocMetaBlock = TypeVar("TTocMetaBlock")
 TFileDef = TypeVar("TFileDef", bound=FileDef)
 AssembleFileMetaFunc = Callable[[TFileDef], TFileMeta]
 DisassembleFileMetaFunc = Callable[[TFileMeta], TFileDef]
-AssembleMetaFunc = Callable[[BinaryIO, TMetaBlock, TTocMetaBlock], TMetadata]
+AssembleMetaFunc = Callable[[BinaryIO, TMetaBlock, Optional[TTocMetaBlock]], TMetadata]
 DisassembleMetaFunc = Callable[[BinaryIO, TMetadata], Tuple[TMetaBlock, TTocMetaBlock]]
 
 
@@ -189,7 +189,7 @@ def get_or_write_name(name: str, stream: BinaryIO, lookup: Dict[str, int]) -> in
 
 
 @dataclass
-class TOCSerializationInfo:
+class TOCSerializationInfo(Generic[TFileDef]):
     drive: StreamSerializer[DriveDef]
     folder: StreamSerializer[FolderDef]
     file: StreamSerializer[TFileDef]
@@ -197,7 +197,7 @@ class TOCSerializationInfo:
 
 
 @dataclass
-class IOAssembler:
+class IOAssembler(Generic[TFileDef, TFileMeta]):
     """
     A Helper class used to assemble the SGA hierarchy
     """
@@ -205,7 +205,7 @@ class IOAssembler:
     stream: BinaryIO
     ptrs: ArchivePtrs
     toc: TocBlock
-    toc_serialization_info: TOCSerializationInfo
+    toc_serialization_info: TOCSerializationInfo[TFileDef]
 
     build_file_meta: AssembleFileMetaFunc[TFileDef, TFileMeta]
     decompress_files: bool = False
@@ -304,7 +304,7 @@ class IOAssembler:
         self,
         drive_def: DriveDef,
         folder_defs: List[FolderDef],
-        file_defs: List[FileDef],
+        file_defs: List[TFileDef],
         names: Dict[int, str],
     ) -> Drive[TFileMeta]:
         local_file_defs = file_defs[drive_def.file_range[0] : drive_def.file_range[1]]
@@ -331,9 +331,9 @@ class IOAssembler:
         _apply_self_as_parent(drive)
         return drive
 
-    def assemble(self) -> List[Drive]:
+    def assemble(self) -> List[Drive[TFileMeta]]:
         drive_defs, folder_defs, file_defs, names = self.read_toc()
-        drives: List[Drive] = [
+        drives: List[Drive[TFileMeta]] = [
             self.assemble_drive(drive_def, folder_defs, file_defs, names)
             for drive_def in drive_defs
         ]
@@ -341,14 +341,14 @@ class IOAssembler:
 
 
 @dataclass
-class IODisassembler:
+class IODisassembler(Generic[TFileMeta, TFileDef]):
     def __init__(
         self,
         drives: List[Drive[TFileMeta]],
         toc_stream: BinaryIO,
         data_stream: BinaryIO,
         name_stream: BinaryIO,
-        toc_serialization_info: TOCSerializationInfo,
+        toc_serialization_info: TOCSerializationInfo[TFileDef],
         meta2def: DisassembleFileMetaFunc[TFileMeta, TFileDef],
     ):
         self.drives = drives
@@ -398,14 +398,12 @@ class IODisassembler:
     ) -> Tuple[int, int]:
         # Create temporary None folders to ensure a continuous range of child folders; BEFORE entering any child folders
         subfolder_start = len(self.flat_folders)
-        self.flat_folders.extend([None] * len(folders))
+        self.flat_folders.extend([None] * len(folders))  # type:ignore
         subfolder_end = len(self.flat_folders)
 
         # Enter subfolders, and add them to the flat array
         subfolder_defs = [self.disassemble_folder(folder) for folder in folders]
-        self.flat_folders[
-            subfolder_start:subfolder_end
-        ] = subfolder_defs  # copy to array
+        self.flat_folders[subfolder_start:subfolder_end] = subfolder_defs
         return subfolder_start, subfolder_end
 
     def disassemble_folder(self, folder: Folder[TFileMeta]) -> FolderDef:
@@ -414,7 +412,7 @@ class IODisassembler:
 
         # Subfolders
         # # Since Relic typically uses the first folder as the root folder; I will try to preserve that parent folders come before their child folders
-        folder_def = FolderDef(None, None, None)
+        folder_def = FolderDef(None, None, None)  # type: ignore
 
         subfolder_range = self.flatten_folder_collection(folder.sub_folders)
 
@@ -428,8 +426,8 @@ class IODisassembler:
 
         return folder_def
 
-    def disassemble_drive(self, drive: Drive) -> DriveDef:
-        drive_folder_def = FolderDef(None, None, None)
+    def disassemble_drive(self, drive: Drive[TFileMeta]) -> DriveDef:
+        drive_folder_def = FolderDef(None, None, None)  # type: ignore
         root_folder = len(self.flat_folders)
         folder_start = len(self.flat_folders)
         file_start = len(self.flat_files)
@@ -627,8 +625,8 @@ def load_lazy_data(file: File[TFileMeta]) -> None:
     file._lazy_info = None
 
 
-def _fix_toc(toc: TocBlock, cur_toc_start: int, desired_toc_start: int):
-    def _fix(info: Tuple[int, int]):
+def _fix_toc(toc: TocBlock, cur_toc_start: int, desired_toc_start: int) -> None:
+    def _fix(info: Tuple[int, int]) -> Tuple[int, int]:
         return info[0] + (cur_toc_start - desired_toc_start), info[1]
 
     toc.folder_info = _fix(toc.folder_info)
@@ -639,22 +637,22 @@ def _fix_toc(toc: TocBlock, cur_toc_start: int, desired_toc_start: int):
 
 class ArchiveSerializer(
     protocols.ArchiveSerializer[Archive[TMetadata, TFileMeta]],
-    Generic[TMetadata, TFileMeta, TFileDef, TTocMetaBlock],
+    Generic[TMetadata, TFileMeta, TFileDef, TMetaBlock, TTocMetaBlock],
 ):
     # Would use a dataclass; but I also want to be able to override defaults in parent dataclasses
     def __init__(
         self,
         version: Version,
-        meta_serializer: StreamSerializer[MetaBlock],
+        meta_serializer: StreamSerializer[TMetaBlock],
         toc_serializer: StreamSerializer[TocBlock],
         toc_meta_serializer: Optional[StreamSerializer[TTocMetaBlock]],
-        toc_serialization_info: TOCSerializationInfo,
-        assemble_meta: AssembleMetaFunc[MetaBlock, TTocMetaBlock, TMetadata],
-        disassemble_meta: DisassembleMetaFunc[TMetadata, MetaBlock, TTocMetaBlock],
+        toc_serialization_info: TOCSerializationInfo[TFileDef],
+        assemble_meta: AssembleMetaFunc[TMetaBlock, TTocMetaBlock, TMetadata],
+        disassemble_meta: DisassembleMetaFunc[TMetadata, TMetaBlock, TTocMetaBlock],
         build_file_meta: AssembleFileMetaFunc[TFileDef, TFileMeta],
-        gen_empty_meta: Callable[[], TMetadata],
-        finalize_meta: Callable[[BinaryIO, TMetadata], None],
-        meta2def: Callable[[TFileMeta], FileDef],
+        gen_empty_meta: Callable[[], TMetaBlock],
+        finalize_meta: Callable[[BinaryIO, TMetaBlock], None],
+        meta2def: Callable[[TFileMeta], TFileDef],
     ):
         self.version = version
         self.meta_serializer = meta_serializer
@@ -673,7 +671,7 @@ class ArchiveSerializer(
         stream: BinaryIO,
         lazy: bool = False,
         decompress: bool = True,
-        skip_magic_and_version=False,
+        skip_magic_and_version: bool = False,
     ) -> Archive[TMetadata, TFileMeta]:
         # Magic & Version; skippable so that we can check for a valid file and read the version elsewhere
         if not skip_magic_and_version:
@@ -740,7 +738,7 @@ class ArchiveSerializer(
                             temp_stream.tell()
                         )  # the start of the toc stream in the current stream
                         toc_writeback = toc_start
-                        self.toc_serializer.pack(temp_stream, TocBlock.EMPTY)
+                        self.toc_serializer.pack(temp_stream, TocBlock.default())
 
                         if self.toc_meta_serializer:
                             self.toc_meta_serializer.pack(temp_stream, toc_meta)
