@@ -116,7 +116,11 @@ class ArchiveSerializer(Protocol[TArchive]):
     """
 
     def read(
-            self, stream: BinaryIO, lazy: bool = False, decompress: bool = True, skip_magic_and_version: bool = False
+        self,
+        stream: BinaryIO,
+        lazy: bool = False,
+        decompress: bool = True,
+        skip_magic_and_version: bool = False,
     ) -> TArchive:
         """
         Converts an archive from its binary representation.

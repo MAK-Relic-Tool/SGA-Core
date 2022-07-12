@@ -14,7 +14,8 @@ from typing import (
     TypeVar,
     Any,
     Union,
-    Generator, Callable,
+    Generator,
+    Callable,
 )
 
 from relic.core.typeshed import TypeAlias
@@ -27,7 +28,8 @@ from relic.sga.core.protocols import (
     IOPathable,
     IOWalkable,
     IOContainer,
-    IOWalk, StreamSerializer,
+    IOWalk,
+    StreamSerializer,
 )
 
 
@@ -107,6 +109,7 @@ class File(
     metadata: TFileMeta
     parent: Optional[Drive[TFileMeta] | Folder[TFileMeta]] = None
     _lazy_info: Optional[FileLazyInfo] = None
+    _data_uncompressed_size: Optional[int] = None
 
     @property
     def data(self) -> bytes:
@@ -115,6 +118,7 @@ class File(
                 raise TypeError("Data was not loaded!")
             self._data = self._lazy_info.read()
             self._lazy_info = None
+            self._data_uncompressed_size
         return self._data
 
     @data.setter
@@ -134,12 +138,13 @@ class File(
     def is_compressed(self) -> bool:
         return self._is_compressed
 
-    def compress(self) -> None:
-        if self.data is None:
-            raise TypeError("Data was not loaded!")
-        if not self._is_compressed:
-            self.data = zlib.compress(self.data)
-            self._is_compressed = True
+    # def compress(self) -> None:
+    #     if self.data is None:
+    #         raise TypeError("Data was not loaded!")
+    #     if not self._is_compressed:
+    #         self._data_uncompressed_size
+    #         self.data = zlib.compress(self.data)
+    #         self._is_compressed = True
 
     def decompress(self) -> None:
         if self._is_compressed:
@@ -219,11 +224,17 @@ class Archive(Generic[TMeta, TFileMeta]):
 
 
 @dataclass
-class TocHeader:
+class TocBlock:
     drive_info: Tuple[int, int]
     folder_info: Tuple[int, int]
     file_info: Tuple[int, int]
     name_info: Tuple[int, int]
+
+    @classmethod
+    @property
+    def EMPTY(cls) -> TocBlock:
+        null_pair = (-1, -1)
+        return cls(null_pair, null_pair, null_pair, null_pair)
 
 
 @dataclass
@@ -232,4 +243,3 @@ class ArchivePtrs:
     header_size: int
     data_pos: int
     data_size: Optional[int] = None
-
