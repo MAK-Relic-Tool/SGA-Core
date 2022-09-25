@@ -15,14 +15,22 @@ from typing import (
     Any,
     Union,
     Generator,
+    Callable,
 )
 
-from typing_extensions import TypeAlias
+from relic.core.typeshed import TypeAlias
 
-from relic.sga import protocols as p
-from relic.sga._core import StorageType
-from relic.sga.errors import DecompressedSizeMismatch
-from relic.sga.protocols import IOChild, IOPathable, IOWalkable, IOContainer, IOWalk
+from relic.sga.core import protocols as p
+from relic.sga.core.definitions import StorageType, MagicWord, Version
+from relic.sga.core.errors import DecompressedSizeMismatch, VersionMismatchError
+from relic.sga.core.protocols import (
+    IOChild,
+    IOPathable,
+    IOWalkable,
+    IOContainer,
+    IOWalk,
+    StreamSerializer,
+)
 
 
 def _build_io_path(name: str, parent: Optional[Any]) -> PurePath:
@@ -44,13 +52,15 @@ class FileLazyInfo:
         decompress = self.decompress if decompress is None else decompress
         jump_back = self.stream.tell()
         self.stream.seek(self.jump_to)
-        buffer = self.stream.read(self.packed_size)
+        in_buffer = self.stream.read(self.packed_size)
         if decompress and self.packed_size != self.unpacked_size:
-            buffer = zlib.decompress(buffer)
-            if len(buffer) != self.unpacked_size:
-                raise DecompressedSizeMismatch(len(buffer), self.unpacked_size)
+            out_buffer = zlib.decompress(in_buffer)
+            if len(out_buffer) != self.unpacked_size:
+                raise DecompressedSizeMismatch(len(out_buffer), self.unpacked_size)
+        else:
+            out_buffer = in_buffer
         self.stream.seek(jump_back)
-        return buffer
+        return out_buffer
 
 
 @dataclass
@@ -70,7 +80,7 @@ class FolderDef:
 
 
 @dataclass
-class FileDefABC:
+class FileDef:
     name_pos: int
     data_pos: int
     length_on_disk: int
@@ -128,12 +138,13 @@ class File(
     def is_compressed(self) -> bool:
         return self._is_compressed
 
-    def compress(self) -> None:
-        if self.data is None:
-            raise TypeError("Data was not loaded!")
-        if not self._is_compressed:
-            self.data = zlib.compress(self.data)
-            self._is_compressed = True
+    # def compress(self) -> None:
+    #     if self.data is None:
+    #         raise TypeError("Data was not loaded!")
+    #     if not self._is_compressed:
+    #         self._data_uncompressed_size
+    #         self.data = zlib.compress(self.data)
+    #         self._is_compressed = True
 
     def decompress(self) -> None:
         if self._is_compressed:
@@ -212,25 +223,17 @@ class Archive(Generic[TMeta, TFileMeta]):
                 yield inner_walk
 
 
-TArchive = TypeVar("TArchive", bound=Archive[Any, Any])
-
-
-class ArchiveSerializer(p.ArchiveIO[TArchive]):
-    def read(
-        self, stream: BinaryIO, lazy: bool = False, decompress: bool = True
-    ) -> TArchive:
-        raise NotImplementedError
-
-    def write(self, stream: BinaryIO, archive: TArchive) -> int:
-        raise NotImplementedError
-
-
 @dataclass
-class TocHeader:
+class TocBlock:
     drive_info: Tuple[int, int]
     folder_info: Tuple[int, int]
     file_info: Tuple[int, int]
     name_info: Tuple[int, int]
+
+    @classmethod
+    def default(cls) -> TocBlock:
+        null_pair = (0, 0)
+        return cls(null_pair, null_pair, null_pair, null_pair)
 
 
 @dataclass
@@ -239,3 +242,7 @@ class ArchivePtrs:
     header_size: int
     data_pos: int
     data_size: Optional[int] = None
+
+    @classmethod
+    def default(cls) -> ArchivePtrs:
+        return cls(0, 0, 0, 0)
