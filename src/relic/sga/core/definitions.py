@@ -15,10 +15,11 @@ MagicWord = MagicWordIO(Struct("< 8s"), "_ARCHIVE".encode("ascii"))
 
 @dataclass
 class Version:
-    """The Major Version; Relic refers to this as the 'Version'"""
+    """A Version object;"""
 
+    """The Major Version; Relic refers to this as the 'Version'"""
     major: int
-    """ The Minor Version; Relic refers to this as the 'Product' """
+    """The Minor Version; Relic refers to this as the 'Product'"""
     minor: int = 0
 
     LAYOUT: ClassVar[Struct] = Struct("<2H")
