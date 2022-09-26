@@ -1,7 +1,16 @@
 from __future__ import annotations
 
-import typing
-from typing import Optional, Dict, Any, BinaryIO, Text, Collection
+from typing import (
+    Optional,
+    Dict,
+    Any,
+    BinaryIO,
+    Text,
+    Collection,
+    Mapping,
+    cast,
+    Protocol,
+)
 
 from fs import ResourceType, errors
 from fs.base import FS
@@ -17,19 +26,19 @@ from relic.sga.core.errors import VersionNotSupportedError
 ESSENCE_NAMESPACE = "essence"
 
 
-class EssenceFSHandler(typing.Protocol):
-    def read(self, sga_stream: BinaryIO) -> EssenceFS:
+class EssenceFSHandler(Protocol):
+    def read(self, stream: BinaryIO) -> EssenceFS:
         raise NotImplementedError
 
-    def write(self, sga_stream: BinaryIO, fs: EssenceFS) -> int:
+    def write(self, stream: BinaryIO, essence_fs: EssenceFS) -> int:
         raise NotImplementedError
 
 
 class EssenceFSFactory:
-    def __init__(self):
+    def __init__(self) -> None:
         self.handler_map: Dict[Version, EssenceFSHandler] = {}
 
-    def register_handler(self, version: Version, handler: EssenceFSHandler):
+    def register_handler(self, version: Version, handler: EssenceFSHandler) -> None:
         if version is None:
             raise ValueError
         if handler is None:
@@ -44,7 +53,7 @@ class EssenceFSFactory:
         MagicWord.read_magic_word(sga_stream)
         return Version.unpack(sga_stream)
 
-    def _get_handler(self, version: Version):
+    def _get_handler(self, version: Version) -> EssenceFSHandler:
         handler = self.handler_map.get(version)
         if handler is None:
             # This may raise a 'false positive' if a Null handler is registered
@@ -53,17 +62,17 @@ class EssenceFSFactory:
 
     def _get_handler_from_stream(
         self, sga_stream: BinaryIO, version: Optional[Version] = None
-    ):
+    ) -> EssenceFSHandler:
         if version is None:
             version = self._read_magic_and_version(sga_stream)
         return self._get_handler(version)
 
     def _get_handler_from_fs(
         self, sga_fs: EssenceFS, version: Optional[Version] = None
-    ):
+    ) -> EssenceFSHandler:
         if version is None:
             sga_version: Dict[str, int] = sga_fs.getmeta("essence").get("version")  # type: ignore
-            version = Version(sga_version.get("major"), sga_version.get("minor"))
+            version = Version(sga_version["major"], sga_version["minor"])
         return self._get_handler(version)
 
     def read(
@@ -86,7 +95,7 @@ class _EssenceFile(_MemoryFile):
 class _EssenceDirEntry(_DirEntry):
     def __init__(self, resource_type: ResourceType, name: Text):
         super().__init__(resource_type, name)
-        self.essence = {}
+        self.essence: Dict[str, object] = {}
 
     def to_info(self, namespaces=None):
         # type: (Optional[Collection[Text]]) -> Info
@@ -107,10 +116,12 @@ class _EssenceDriveFS(MemoryFS):
         super().__init__()
         self._hostfs = host
 
-    def _make_dir_entry(self, resource_type, name):
+    def _make_dir_entry(
+        self, resource_type: ResourceType, name: str
+    ) -> _EssenceDirEntry:
         return _EssenceDirEntry(resource_type, name)
 
-    def setinfo(self, path, info):
+    def setinfo(self, path: str, info: Mapping[str, Mapping[str, object]]) -> None:
         _path = self.validatepath(path)
         with self._lock:
             dir_path, file_name = split(_path)
@@ -119,7 +130,7 @@ class _EssenceDriveFS(MemoryFS):
             if parent_dir_entry is None or file_name not in parent_dir_entry:
                 raise errors.ResourceNotFound(path)
 
-            resource_entry = typing.cast(
+            resource_entry = cast(
                 _EssenceDirEntry, parent_dir_entry.get_entry(file_name)
             )
 
@@ -138,28 +149,27 @@ class _EssenceDriveFS(MemoryFS):
             # if LAZY_NAMESPACE in info and not resource_entry.is_dir:
             #     lazy
 
-    def getessence(self, path):
+    def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
 
 
 class EssenceFS(MultiFS):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self._sga_meta = {}
+        self._sga_meta: Dict[str, object] = {}
 
-    def getmeta(self, namespace="standard"):
+    def getmeta(self, namespace: str = "standard") -> Mapping[str, object]:
         if namespace == ESSENCE_NAMESPACE:
             return self._sga_meta.copy()
-        else:
-            return super().getmeta(namespace)
+        return super().getmeta(namespace)
 
-    def setmeta(self, meta: Dict[str, Any], namespace="standard"):
+    def setmeta(self, meta: Dict[str, Any], namespace: str = "standard") -> None:
         if namespace == ESSENCE_NAMESPACE:
             self._sga_meta = meta.copy()
         else:
             raise NotImplementedError
 
-    def getessence(self, path):
+    def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
 
     def create_drive(self, name: str) -> _EssenceDriveFS:
@@ -174,8 +184,8 @@ class EssenceFS(MultiFS):
         if ":" in path:
             parts = path.split(":", 1)
             return self.get_fs(parts[0])
-        else:
-            return super()._delegate(path)
+
+        return super()._delegate(path)
 
 
 # if __name__ == "__main__":
