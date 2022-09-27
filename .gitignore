@@ -12,7 +12,10 @@ __pycache__/
 src/**/*.egg-info/*
 dist/*
 
+# Ignore local builds
+build/**
 
+# Ignore local test sources
 tests/**/sources.json
 
 # Ignore docs
