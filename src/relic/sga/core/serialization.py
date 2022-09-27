@@ -196,7 +196,7 @@ class FileDef:
 
 TFileDef = TypeVar("TFileDef", bound=FileDef)
 AssembleFileMetaFunc = Callable[[TFileDef], Dict[str, object]]
-DisassembleFileMetaFunc = Callable[[Dict[str,object]], TFileDef]
+DisassembleFileMetaFunc = Callable[[Dict[str, object]], TFileDef]
 AssembleMetaFunc = Callable[
     [BinaryIO, TMetaBlock, Optional[TTocMetaBlock]], Dict[str, object]
 ]
@@ -205,7 +205,7 @@ DisassembleMetaFunc = Callable[
 ]
 
 
-def write_data(data: bytes, stream: BinaryIO) -> int:
+def _write_data(data: bytes, stream: BinaryIO) -> int:
     """
     Returns the index the data was written to.
     """
@@ -214,7 +214,7 @@ def write_data(data: bytes, stream: BinaryIO) -> int:
     return pos
 
 
-def get_or_write_name(name: str, stream: BinaryIO, lookup: Dict[str, int]) -> int:
+def _get_or_write_name(name: str, stream: BinaryIO, lookup: Dict[str, int]) -> int:
     if name in lookup:
         return lookup[name]
 
@@ -279,11 +279,11 @@ class FSAssembler(Generic[TFileDef]):
         )
         files = self.read_toc_part(self.toc.file_info, self.toc_serialization_info.file)
         names = (
-            read_toc_names_as_count(
+            _read_toc_names_as_count(
                 self.stream, self.toc.name_info, self.ptrs.header_pos
             )
             if self.toc_serialization_info.name_toc_is_count
-            else read_toc_names_as_size(
+            else _read_toc_names_as_size(
                 self.stream, self.toc.name_info, self.ptrs.header_pos
             )
         )
@@ -466,10 +466,10 @@ class FSDisassembler(Generic[TFileDef]):
         file_def.length_on_disk = len(data)
         file_def.length_in_archive = len(store_data)
 
-        file_def.name_pos = get_or_write_name(
+        file_def.name_pos = _get_or_write_name(
             file_name, self.name_stream, self.flat_names
         )
-        file_def.data_pos = write_data(store_data, self.data_stream)
+        file_def.data_pos = _write_data(store_data, self.data_stream)
 
         return file_def
 
@@ -514,7 +514,7 @@ class FSDisassembler(Generic[TFileDef]):
 
         folder_name = str(path).split(":", 1)[-1]  # Strip 'alias:' from path
 
-        folder_def.name_pos = get_or_write_name(
+        folder_def.name_pos = _get_or_write_name(
             folder_name, self.name_stream, self.flat_names
         )
         folder_def.file_range = subfile_range
@@ -530,7 +530,7 @@ class FSDisassembler(Generic[TFileDef]):
         file_start = len(self.flat_files)
         self.flat_folders.append(drive_folder_def)
 
-        drive_folder_def.name_pos = get_or_write_name(
+        drive_folder_def.name_pos = _get_or_write_name(
             name, self.name_stream, self.flat_names
         )
         drive_folder_def.file_range = self.flatten_file_collection(drive)
@@ -593,7 +593,7 @@ class FSDisassembler(Generic[TFileDef]):
         return self.write_toc()
 
 
-def read_toc_names_as_count(
+def _read_toc_names_as_count(
     stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int, buffer_size: int = 256
 ) -> Dict[int, str]:
     NULL = 0
@@ -631,7 +631,7 @@ def read_toc_names_as_count(
     return names
 
 
-def read_toc_names_as_size(
+def _read_toc_names_as_size(
     stream: BinaryIO, toc_info: Tuple[int, int], header_pos: int
 ) -> Dict[int, str]:
     stream.seek(header_pos + toc_info[0])
@@ -716,7 +716,7 @@ def _fix_toc(toc: TocBlock, cur_toc_start: int, desired_toc_start: int) -> None:
 
 
 class EssenceFSSerializer(
-    Generic[TFileDef, TMetaBlock, TTocMetaBlock], EssenceFSHandler
+    EssenceFSHandler, Generic[TFileDef, TMetaBlock, TTocMetaBlock]
 ):
     # Would use a dataclass; but I also want to be able to override defaults in parent dataclasses
     def __init__(
@@ -867,6 +867,7 @@ class EssenceFSSerializer(
 #       NameBlock
 #       DataBlock
 
+
 @dataclass
 class FileLazyInfo:
     jump_to: int
@@ -895,6 +896,7 @@ class ArchivePtrs:
     """
     Contains 'pointers' to the TOC Block (header_pos, header_size) and the DATA Block (data_pos, data_size)
     """
+
     header_pos: int
     header_size: int
     data_pos: int
@@ -906,3 +908,29 @@ class ArchivePtrs:
         Creates a 'Default' Archive Ptrs Object; used to create a valid placeholder until proper data is supplied.
         """
         return cls(0, 0, 0, 0)
+
+
+__all__ = [
+    "TocBlock",
+    "TocHeaderSerializer",
+    "DriveDef",
+    "DriveDefSerializer",
+    "FolderDef",
+    "FolderDefSerializer",
+    "MetaBlock",
+    "TMetaBlock",
+    "TTocMetaBlock",
+    "FileDef",
+    "TFileDef",
+    "AssembleFileMetaFunc",
+    "DisassembleFileMetaFunc",
+    "AssembleMetaFunc",
+    "DisassembleMetaFunc",
+    "TOCSerializationInfo",
+    "FSAssembler",
+    "FSDisassembler",
+    "Md5ChecksumHelper",
+    "EssenceFSSerializer",
+    "FileLazyInfo",
+    "ArchivePtrs",
+]

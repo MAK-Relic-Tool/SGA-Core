@@ -87,3 +87,6 @@ class VerificationType(int, Enum):
     CRC_BLOCKS = 2  # unknown real values, assuming incremental
     MD5_BLOCKS = 3  # unknown real values, assuming incremental
     SHA1_BLOCKS = 4  # unknown real values, assuming incremental
+
+
+__all__ = ["MagicWord", "Version", "StorageType", "VerificationType"]

@@ -5,9 +5,3 @@ from relic.sga.core.definitions import Version, MagicWord, StorageType, Verifica
 
 __version__ = "1.0.0"
 
-__all__ = [
-    "Version",
-    "MagicWord",
-    "StorageType",
-    "VerificationType",
-]
