@@ -19,7 +19,7 @@ from fs.memoryfs import MemoryFS, _DirEntry, _MemoryFile
 from fs.multifs import MultiFS
 from fs.path import split
 
-from relic.sga.core import Version, MagicWord
+from relic.sga.core.definitions import Version, MagicWord
 from relic.sga.core.errors import VersionNotSupportedError
 
 ESSENCE_NAMESPACE = "essence"
