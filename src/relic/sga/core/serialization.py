@@ -19,13 +19,10 @@ from typing import (
 )
 
 from fs.base import FS
+
 from serialization_tools.size import KiB, MiB
 from serialization_tools.structx import Struct
 
-from relic.sga.core import StorageType
-from relic.sga.core.abstract import (
-    TFileMeta,
-)
 from relic.sga.core.definitions import StorageType, Version, MagicWord
 from relic.sga.core.errors import (
     MD5MismatchError,
@@ -199,7 +196,7 @@ class FileDef:
 
 TFileDef = TypeVar("TFileDef", bound=FileDef)
 AssembleFileMetaFunc = Callable[[TFileDef], Dict[str, object]]
-DisassembleFileMetaFunc = Callable[[TFileMeta], TFileDef]
+DisassembleFileMetaFunc = Callable[[Dict[str,object]], TFileDef]
 AssembleMetaFunc = Callable[
     [BinaryIO, TMetaBlock, Optional[TTocMetaBlock]], Dict[str, object]
 ]
@@ -425,7 +422,7 @@ class FSDisassembler(Generic[TFileDef]):
         data_stream: BinaryIO,
         name_stream: BinaryIO,
         toc_serialization_info: TOCSerializationInfo[TFileDef],
-        meta2def: DisassembleFileMetaFunc[Dict[str, typing.Any], TFileDef],
+        meta2def: DisassembleFileMetaFunc[TFileDef],
     ):
         self.fs = fs
         """A stream containing the TOC Block"""
@@ -869,6 +866,7 @@ class EssenceFSSerializer(
 #       DriveBlock
 #       NameBlock
 #       DataBlock
+
 @dataclass
 class FileLazyInfo:
     jump_to: int
@@ -894,6 +892,9 @@ class FileLazyInfo:
 
 @dataclass
 class ArchivePtrs:
+    """
+    Contains 'pointers' to the TOC Block (header_pos, header_size) and the DATA Block (data_pos, data_size)
+    """
     header_pos: int
     header_size: int
     data_pos: int
@@ -901,4 +902,7 @@ class ArchivePtrs:
 
     @classmethod
     def default(cls) -> ArchivePtrs:
+        """
+        Creates a 'Default' Archive Ptrs Object; used to create a valid placeholder until proper data is supplied.
+        """
         return cls(0, 0, 0, 0)
