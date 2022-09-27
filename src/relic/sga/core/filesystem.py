@@ -17,7 +17,6 @@ from fs.base import FS
 from fs.info import Info
 from fs.memoryfs import MemoryFS, _DirEntry, _MemoryFile
 from fs.multifs import MultiFS
-from fs.osfs import OSFS
 from fs.path import split
 
 from relic.sga.core import Version, MagicWord
@@ -221,7 +220,12 @@ class EssenceFS(MultiFS):
 #         print(fs.getinfo("/", ["basic", "access"]).raw)
 #     pass
 
-if __name__ == "__main__":
-    temp = OSFS("")
-    print(temp.root_path)
-    print(*temp.listdir("/"))
+__all__ = [
+    "ESSENCE_NAMESPACE",
+    "EssenceFSHandler",
+    "EssenceFSFactory",
+    "_EssenceFile",
+    "_EssenceDirEntry",
+    "_EssenceDriveFS",
+    "EssenceFS",
+]

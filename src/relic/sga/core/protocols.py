@@ -37,3 +37,6 @@ class StreamSerializer(Protocol[T]):
         :return: The number of bytes written.
         """
         raise NotImplementedError
+
+
+__all__ = ["T", "StreamSerializer"]
