@@ -15,10 +15,14 @@ MagicWord = MagicWordIO(Struct("< 8s"), "_ARCHIVE".encode("ascii"))
 
 @dataclass
 class Version:
-    """The Major Version; Relic refers to this as the 'Version'"""
+    """A Version object.
+
+    Args:
+        major (int): The Major Version; Relic refers to this as the 'Version'.
+        minor (int): The Minor Version; Relic refers to this as the 'Product'.
+    """
 
     major: int
-    """ The Minor Version; Relic refers to this as the 'Product' """
     minor: int = 0
 
     LAYOUT: ClassVar[Struct] = Struct("<2H")
@@ -83,3 +87,6 @@ class VerificationType(int, Enum):
     CRC_BLOCKS = 2  # unknown real values, assuming incremental
     MD5_BLOCKS = 3  # unknown real values, assuming incremental
     SHA1_BLOCKS = 4  # unknown real values, assuming incremental
+
+
+__all__ = ["MagicWord", "Version", "StorageType", "VerificationType"]

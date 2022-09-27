@@ -3,8 +3,8 @@ Error definitions for the SGA API
 """
 from typing import List, Optional
 
-from relic.core.errors import MismatchError
-from relic.sga.core._core import Version
+from relic.core.errors import MismatchError, RelicToolError
+from relic.sga.core.definitions import Version
 
 
 class VersionMismatchError(MismatchError[Version]):
@@ -29,7 +29,7 @@ class MD5MismatchError(MismatchError[bytes]):
         super().__init__("MD5", received, expected)
 
 
-class VersionNotSupportedError(Exception):
+class VersionNotSupportedError(RelicToolError):
     """
     An unknown version was provided.
     """
