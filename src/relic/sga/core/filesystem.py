@@ -111,9 +111,8 @@ class _EssenceDirEntry(_DirEntry):
 
 
 class _EssenceDriveFS(MemoryFS):
-    def __init__(self, host: EssenceFS):
+    def __init__(self) -> None:
         super().__init__()
-        self._hostfs = host
 
     def _make_dir_entry(
         self, resource_type: ResourceType, name: str
@@ -172,7 +171,7 @@ class EssenceFS(MultiFS):
         return self.getinfo(path, [ESSENCE_NAMESPACE])
 
     def create_drive(self, name: str) -> _EssenceDriveFS:
-        drive = _EssenceDriveFS(self)
+        drive = _EssenceDriveFS()
         self.add_fs(name, drive)
         return drive
 
