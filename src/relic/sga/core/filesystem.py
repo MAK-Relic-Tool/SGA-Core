@@ -16,23 +16,21 @@ from typing import (
     TypeVar,
     Generic,
     runtime_checkable,
-    Tuple,
 )
 
 import fs.opener.errors
 import pkg_resources
 from fs import ResourceType, errors
-from fs.path import split, abspath, join, normpath
 from fs.base import FS
 from fs.info import Info
 from fs.memoryfs import MemoryFS, _DirEntry, _MemoryFile
 from fs.multifs import MultiFS
+from fs.opener import Opener, registry as fs_registry
 from fs.opener.parse import ParseResult
-from fs.opener import registry as fs_registry
+from fs.path import split
 
 from relic.sga.core.definitions import Version, MagicWord, _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
-from fs.opener import Opener
 
 ESSENCE_NAMESPACE = "essence"
 
