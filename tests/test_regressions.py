@@ -39,6 +39,8 @@ fs__all__ = [
     "_EssenceDirEntry",
     "_EssenceDriveFS",
     "EssenceFS",
+    "registry",
+    "EssenceFSOpener",
 ]
 protocols__all__ = ["T", "StreamSerializer"]
 serialization__all__ = [

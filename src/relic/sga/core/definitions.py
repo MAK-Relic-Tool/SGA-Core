@@ -7,10 +7,17 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar, BinaryIO
 
+from relic.core.errors import MismatchError
 from serialization_tools.magic import MagicWordIO
 from serialization_tools.structx import Struct
 
 MagicWord = MagicWordIO(Struct("< 8s"), "_ARCHIVE".encode("ascii"))
+
+
+def _validate_magic_word(self: MagicWordIO, stream: BinaryIO, advance: bool):
+    magic = self.read_magic_word(stream, advance)
+    if magic != self.word:
+        raise MismatchError("MagicWord", magic, self.word)
 
 
 @dataclass

@@ -23,7 +23,12 @@ from fs.base import FS
 from serialization_tools.size import KiB, MiB
 from serialization_tools.structx import Struct
 
-from relic.sga.core.definitions import StorageType, Version, MagicWord
+from relic.sga.core.definitions import (
+    StorageType,
+    Version,
+    MagicWord,
+    _validate_magic_word,
+)
 from relic.sga.core.errors import (
     MD5MismatchError,
     VersionMismatchError,
@@ -747,7 +752,7 @@ class EssenceFSSerializer(
 
     def read(self, stream: BinaryIO) -> EssenceFS:
         # Magic & Version; skippable so that we can check for a valid file and read the version elsewhere
-        MagicWord.assert_magic_word(stream, advance=True)
+        _validate_magic_word(MagicWord, stream, advance=True)
         stream_version = Version.unpack(stream)
         if stream_version != self.version:
             raise VersionMismatchError(stream_version, self.version)
@@ -776,7 +781,10 @@ class EssenceFSSerializer(
         )
         essence_fs = EssenceFS()
         assembler.assemble(essence_fs)
-        essence_info: Dict[str, object] = {"name": name}
+        essence_info: Dict[str, object] = {
+            "name": name,
+            "version": {"major": stream_version.major, "minor": stream_version.minor},
+        }
         if metadata is not None:
             essence_info.update(metadata)
 
