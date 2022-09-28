@@ -14,7 +14,7 @@ from serialization_tools.structx import Struct
 MagicWord = MagicWordIO(Struct("< 8s"), "_ARCHIVE".encode("ascii"))
 
 
-def _validate_magic_word(self: MagicWordIO, stream: BinaryIO, advance: bool):
+def _validate_magic_word(self: MagicWordIO, stream: BinaryIO, advance: bool) -> None:
     magic = self.read_magic_word(stream, advance)
     if magic != self.word:
         raise MismatchError("MagicWord", magic, self.word)

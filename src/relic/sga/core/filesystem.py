@@ -46,11 +46,11 @@ class EntrypointRegistry(Generic[TKey, TValue]):
         self._mapping: Dict[TKey, TValue] = {}
         self._autoload = autoload
 
-    def register(self, key: TKey, value: TValue):
+    def register(self, key: TKey, value: TValue) -> None:
         self._mapping[key] = value
 
     @abc.abstractmethod
-    def auto_register(self, value: TValue):
+    def auto_register(self, value: TValue) -> None:
         raise NotImplementedError
 
     def get(self, key: TKey, default: Optional[TValue] = None) -> Optional[TValue]:
@@ -75,10 +75,10 @@ class EntrypointRegistry(Generic[TKey, TValue]):
         return default
 
     @abc.abstractmethod
-    def _key2entry_point_path(self, key: TKey):
+    def _key2entry_point_path(self, key: TKey) -> str:
         raise NotImplementedError
 
-    def _auto_register_entrypoint(self, entry_point: Any):
+    def _auto_register_entrypoint(self, entry_point: Any) -> None:
         try:
             entry_point_result = entry_point.load()
         except:  # Wrap in exception
@@ -86,7 +86,7 @@ class EntrypointRegistry(Generic[TKey, TValue]):
         return self._register_entrypoint(entry_point_result)
 
     @abc.abstractmethod
-    def _register_entrypoint(self, entry_point_result: Any):
+    def _register_entrypoint(self, entry_point_result: Any) -> None:
         raise NotImplementedError
 
 
@@ -102,10 +102,10 @@ class EssenceFSHandler(Protocol):
 
 
 class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
-    def _key2entry_point_path(self, key: Version):
+    def _key2entry_point_path(self, key: Version) -> str:
         return f"v{key.major}.{key.minor}"
 
-    def _register_entrypoint(self, entry_point_result: Any):
+    def _register_entrypoint(self, entry_point_result: Any) -> None:
         if isinstance(entry_point_result, EssenceFSHandler):
             self.auto_register(entry_point_result)
         elif isinstance(entry_point_result, (list, tuple, Collection)):
@@ -117,12 +117,8 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
             # Callable; register nested result
             self._register_entrypoint(entry_point_result())
 
-    def auto_register(self, value: TValue):
+    def auto_register(self, value: EssenceFSHandler) -> None:
         self.register(value.version, value)
-        # if hasattr(value,"version"):
-        #     self.register(value,value.version)
-        # else:
-        #     raise AttributeError("")
 
     def __init__(self, autoload: bool = True) -> None:
         super().__init__("relic.sga.handler", autoload)
@@ -191,7 +187,7 @@ class EssenceFSOpener(Opener):
         writeable: bool,
         create: bool,
         cwd: str,
-    ):
+    ) -> FS:
         # All EssenceFS should be writable; so we can ignore that
 
         # Resolve Path
