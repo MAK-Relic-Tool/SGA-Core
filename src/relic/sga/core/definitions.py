@@ -39,10 +39,34 @@ class Version:
 
     def __eq__(self, other: object) -> bool:
         return (
-            isinstance(other, Version)
-            and self.major == other.major
-            and self.minor == other.minor
+                isinstance(other, Version)
+                and self.major == other.major
+                and self.minor == other.minor
         )
+
+    def __lt__(self, other):
+        if isinstance(other, Version):
+            return self.major < other.major or \
+                   (self.major == other.major and self.minor < other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+
+    def __gt__(self, other):
+        if isinstance(other, Version):
+            return self.major > other.major or \
+                   (self.major == other.major and self.minor > other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+
+    def __le__(self, other):
+        if isinstance(other, Version):
+            return self.major < other.major or \
+                   (self.major == other.major and self.minor <= other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+
+    def __ge__(self, other):
+        if isinstance(other, Version):
+            return self.major > other.major or \
+                   (self.major == other.major and self.minor >= other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
 
     def __hash__(self) -> int:
         # if this was C we could guarantee the hash was unique
