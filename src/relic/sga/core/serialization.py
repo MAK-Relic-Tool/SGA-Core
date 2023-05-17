@@ -387,7 +387,6 @@ class FSAssembler(Generic[TFileDef]):
         folder_defs: List[FolderDef],
         file_defs: List[TFileDef],
     ) -> FS:
-
         local_file_defs = file_defs[drive_def.file_range[0] : drive_def.file_range[1]]
         local_folder_defs = folder_defs[
             drive_def.folder_range[0] : drive_def.folder_range[1]
@@ -456,7 +455,8 @@ class FSDisassembler(Generic[TFileDef]):
         metadata = dict(container_fs.getinfo(file_name, ["essence"]).raw["essence"])
 
         file_def: TFileDef = self.meta2def(metadata)
-        storage_type = StorageType(metadata["storage_type"])
+        _storage_type_value: int = metadata["storage_type"]  # type: ignore
+        storage_type = StorageType(_storage_type_value)
         if storage_type == StorageType.STORE:
             store_data = data
         elif storage_type in [
