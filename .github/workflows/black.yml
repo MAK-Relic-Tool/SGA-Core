@@ -7,13 +7,11 @@ on:
     branches: [ main ]
     paths:
       - 'src/relic/**'
-      - 'tests/relic/**'
       - '.github/workflows/black.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'src/relic/**'
-      - 'tests/relic/**'
       - '.github/workflows/black.yml'
 
 jobs:
