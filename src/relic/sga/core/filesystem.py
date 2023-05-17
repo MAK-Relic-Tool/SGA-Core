@@ -3,8 +3,21 @@ from __future__ import annotations
 import abc
 import os
 from os.path import expanduser
-from typing import Union, Text, Optional, Collection, Generic, Dict, TypeVar, runtime_checkable, Protocol, BinaryIO, \
-    Any, Mapping, cast
+from typing import (
+    Union,
+    Text,
+    Optional,
+    Collection,
+    Generic,
+    Dict,
+    TypeVar,
+    runtime_checkable,
+    Protocol,
+    BinaryIO,
+    Any,
+    Mapping,
+    cast,
+)
 
 import fs.opener.errors
 import pkg_resources
@@ -39,7 +52,7 @@ class EntrypointRegistry(Generic[TKey, TValue]):
     def auto_register(self, value: TValue) -> None:
         raise NotImplementedError
 
-    def autoload_entrypoint(self, key: TKey):
+    def autoload_entrypoint(self, key: TKey) -> TValue:
         try:
             entry_point = next(
                 pkg_resources.iter_entry_points(
@@ -55,9 +68,7 @@ class EntrypointRegistry(Generic[TKey, TValue]):
             raise NotImplementedError  # TODO specify autoload failed to load in a usable value
         return self._mapping[key]
 
-    def get(
-        self, key: TKey, default: Optional[TValue] = None
-    ) -> Optional[TValue]:
+    def get(self, key: TKey, default: Optional[TValue] = None) -> Optional[TValue]:
         if key in self._mapping:
             return self._mapping[key]
 
@@ -216,7 +227,7 @@ fs_registry.install(EssenceFSOpener)
 
 def _open_fs(
     fs_url: str, protocol: str, writeable: bool, create: bool, cwd: str, opener: Opener
-):
+) -> FS:
     if "://" not in fs_url:
         # URL may just be a path
         fs_url = "{}://{}".format(protocol, fs_url)
@@ -227,10 +238,10 @@ def _open_fs(
 
 
 def open_sga(
-    fs_url,  # type: Union[FS, Text]
-    writeable=False,  # type: bool
-    create=False,  # type: bool
-    cwd=".",  # type: Text
+    fs_url: str,
+    writeable: bool = False,
+    create: bool = False,
+    cwd: str = ".",
     registry: Optional[EssenceFSFactory] = None,
 ) -> EssenceFS:
     opener = EssenceFSOpener(registry)
@@ -296,9 +307,7 @@ class _EssenceDriveFS(MemoryFS):
             fixed_path = path
         return super().validatepath(fixed_path)
 
-    def setinfo(
-        self, path: str, info: Mapping[str, Mapping[str, object]]
-    ) -> None:
+    def setinfo(self, path: str, info: Mapping[str, Mapping[str, object]]) -> None:
         _path = self.validatepath(path)
         with self._lock:
             dir_path, file_name = split(_path)
@@ -340,9 +349,7 @@ class EssenceFS(MultiFS):
             return self._sga_meta.copy()
         return super().getmeta(namespace)
 
-    def setmeta(
-        self, meta: Dict[str, Any], namespace: str = "standard"
-    ) -> None:
+    def setmeta(self, meta: Dict[str, Any], namespace: str = "standard") -> None:
         if namespace == ESSENCE_NAMESPACE:
             self._sga_meta = meta.copy()
         else:
