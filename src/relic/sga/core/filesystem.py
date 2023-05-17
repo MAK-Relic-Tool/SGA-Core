@@ -3,20 +3,8 @@ from __future__ import annotations
 import abc
 import os
 from os.path import expanduser
-from typing import (
-    Optional,
-    Dict,
-    Any,
-    BinaryIO,
-    Text,
-    Collection,
-    Mapping,
-    cast,
-    Protocol,
-    TypeVar,
-    Generic,
-    runtime_checkable,
-)
+from typing import Union, Text, Optional, Collection, Generic, Dict, TypeVar, runtime_checkable, Protocol, BinaryIO, \
+    Any, Mapping, cast
 
 import fs.opener.errors
 import pkg_resources
@@ -26,7 +14,7 @@ from fs.info import Info
 from fs.memoryfs import MemoryFS, _DirEntry, _MemoryFile
 from fs.multifs import MultiFS
 from fs.opener import Opener, registry as fs_registry
-from fs.opener.parse import ParseResult
+from fs.opener.parse import ParseResult, parse_fs_url
 from fs.path import split
 
 from relic.sga.core.definitions import Version, MagicWord, _validate_magic_word
@@ -51,25 +39,34 @@ class EntrypointRegistry(Generic[TKey, TValue]):
     def auto_register(self, value: TValue) -> None:
         raise NotImplementedError
 
-    def get(self, key: TKey, default: Optional[TValue] = None) -> Optional[TValue]:
+    def autoload_entrypoint(self, key: TKey):
+        try:
+            entry_point = next(
+                pkg_resources.iter_entry_points(
+                    self._entry_point_path, self._key2entry_point_path(key)
+                )
+            )
+        except StopIteration:
+            raise FileNotFoundError(f"No entrypoint found for `{key}`!")
+        if entry_point is None:
+            raise ValueError(f"`{key}` produced a null entrypoint!")
+        self._auto_register_entrypoint(entry_point)
+        if key not in self._mapping:
+            raise NotImplementedError  # TODO specify autoload failed to load in a usable value
+        return self._mapping[key]
+
+    def get(
+        self, key: TKey, default: Optional[TValue] = None
+    ) -> Optional[TValue]:
         if key in self._mapping:
             return self._mapping[key]
 
         if self._autoload:
             try:
-                entry_point = next(
-                    pkg_resources.iter_entry_points(
-                        self._entry_point_path, self._key2entry_point_path(key)
-                    )
-                )
-            except StopIteration:
-                entry_point = None
-            if entry_point is None:
+                return self.autoload_entrypoint(key)
+            except FileNotFoundError:
                 return default
-            self._auto_register_entrypoint(entry_point)
-            if key not in self._mapping:
-                raise NotImplementedError  # TODO specify autoload failed to load in a usable value
-            return self._mapping[key]
+        # resort to default value
         return default
 
     @abc.abstractmethod
@@ -159,13 +156,16 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
         return handler.read(sga_stream)
 
     def write(
-        self, sga_stream: BinaryIO, sga_fs: EssenceFS, version: Optional[Version] = None
+        self,
+        sga_stream: BinaryIO,
+        sga_fs: EssenceFS,
+        version: Optional[Version] = None,
     ) -> int:
         handler = self._get_handler_from_fs(sga_fs, version)
         return handler.write(sga_stream, sga_fs)
 
 
-registry = EssenceFSFactory(True)
+sga_registry = registry = EssenceFSFactory(True)
 
 
 # @fs_registry.install
@@ -173,7 +173,7 @@ registry = EssenceFSFactory(True)
 class EssenceFSOpener(Opener):
     def __init__(self, factory: Optional[EssenceFSFactory] = None):
         if factory is None:
-            factory = registry
+            factory = sga_registry
         self.factory = factory
 
     protocols = ["sga"]
@@ -212,6 +212,40 @@ class EssenceFSOpener(Opener):
 
 
 fs_registry.install(EssenceFSOpener)
+
+
+def _open_fs(
+    fs_url: str, protocol: str, writeable: bool, create: bool, cwd: str, opener: Opener
+):
+    if "://" not in fs_url:
+        # URL may just be a path
+        fs_url = "{}://{}".format(protocol, fs_url)
+
+    parse_result = parse_fs_url(fs_url)
+    opened_fs: FS = opener.open_fs(fs_url, parse_result, writeable, create, cwd)
+    return opened_fs
+
+
+def open_sga(
+    fs_url,  # type: Union[FS, Text]
+    writeable=False,  # type: bool
+    create=False,  # type: bool
+    cwd=".",  # type: Text
+    registry: Optional[EssenceFSFactory] = None,
+) -> EssenceFS:
+    opener = EssenceFSOpener(registry)
+    essence_fs: EssenceFS = _open_fs(  # type:ignore
+        fs_url, opener.protocols[0], writeable, create, cwd, opener
+    )
+    return essence_fs
+
+
+def open_sga_from_handle(
+    handle: BinaryIO, registry: Optional[EssenceFSFactory]
+) -> EssenceFS:
+    if registry is None:
+        registry = sga_registry
+    return registry.read(handle)
 
 
 class _EssenceFile(_MemoryFile):
@@ -262,7 +296,9 @@ class _EssenceDriveFS(MemoryFS):
             fixed_path = path
         return super().validatepath(fixed_path)
 
-    def setinfo(self, path: str, info: Mapping[str, Mapping[str, object]]) -> None:
+    def setinfo(
+        self, path: str, info: Mapping[str, Mapping[str, object]]
+    ) -> None:
         _path = self.validatepath(path)
         with self._lock:
             dir_path, file_name = split(_path)
@@ -304,7 +340,9 @@ class EssenceFS(MultiFS):
             return self._sga_meta.copy()
         return super().getmeta(namespace)
 
-    def setmeta(self, meta: Dict[str, Any], namespace: str = "standard") -> None:
+    def setmeta(
+        self, meta: Dict[str, Any], namespace: str = "standard"
+    ) -> None:
         if namespace == ESSENCE_NAMESPACE:
             self._sga_meta = meta.copy()
         else:
@@ -372,4 +410,6 @@ __all__ = [
     "EssenceFS",
     "registry",
     "EssenceFSOpener",
+    "open_sga",
+    "open_sga_from_handle",
 ]
