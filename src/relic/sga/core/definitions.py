@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar, BinaryIO
+from typing import ClassVar, BinaryIO, Any
 
 from relic.core.errors import MismatchError
 from serialization_tools.magic import MagicWordIO
@@ -39,10 +39,34 @@ class Version:
 
     def __eq__(self, other: object) -> bool:
         return (
-            isinstance(other, Version)
-            and self.major == other.major
-            and self.minor == other.minor
+                isinstance(other, Version)
+                and self.major == other.major
+                and self.minor == other.minor
         )
+
+    def __lt__(self, other:Any) -> bool:
+        if isinstance(other, Version):
+            return self.major < other.major or \
+                   (self.major == other.major and self.minor < other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+
+    def __gt__(self, other:Any) -> bool:
+        if isinstance(other, Version):
+            return self.major > other.major or \
+                   (self.major == other.major and self.minor > other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+
+    def __le__(self, other:Any) -> bool:
+        if isinstance(other, Version):
+            return self.major < other.major or \
+                   (self.major == other.major and self.minor <= other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+
+    def __ge__(self, other:Any) -> bool:
+        if isinstance(other, Version):
+            return self.major > other.major or \
+                   (self.major == other.major and self.minor >= other.minor)
+        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
 
     def __hash__(self) -> int:
         # if this was C we could guarantee the hash was unique
