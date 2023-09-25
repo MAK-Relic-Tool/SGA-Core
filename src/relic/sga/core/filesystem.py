@@ -57,11 +57,10 @@ class EntrypointRegistry(Generic[TKey, TValue]):
 
         if self._autoload:
             try:
-                entry_point = next(
-                    pkg_resources.iter_entry_points(
-                        self._entry_point_path, self._key2entry_point_path(key)
-                    )
-                )
+                key_root_path = self._entry_point_path
+                key_path = self._key2entry_point_path(key)
+                entry_points = pkg_resources.iter_entry_points(key_root_path, key_path)
+                entry_point = next(entry_points)
             except StopIteration:
                 entry_point = None
             if entry_point is None:
