@@ -3,7 +3,7 @@ import unittest
 import fs
 from fs.test import FSTestCases
 
-from relic.sga.core.filesystem import EssenceFS, _EssenceDriveFS
+from relic.sga.core.essencesfs import EssenceFS, EssenceDriveFS
 
 
 class TestEssenceFS(FSTestCases, unittest.TestCase):
@@ -12,13 +12,13 @@ class TestEssenceFS(FSTestCases, unittest.TestCase):
         # EssenceFS shouldn't be writeable by default;
         #   being an emulator for Window's hard drives.
         #       With no 'drive' installed, there's nothing to write to!
-        essence_fs.add_fs("data", _EssenceDriveFS("data"), True)
+        essence_fs.add_fs("data", EssenceDriveFS("data"), True)
         return essence_fs
 
 
 class TestEssenceDriveFS(FSTestCases, unittest.TestCase):
     def make_fs(self):
-        return _EssenceDriveFS("")
+        return EssenceDriveFS("")
 
 
 class TestOpener:
