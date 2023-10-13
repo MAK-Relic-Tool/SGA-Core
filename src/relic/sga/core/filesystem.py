@@ -146,14 +146,14 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
         return handler
 
     def _get_handler_from_stream(
-        self, sga_stream: BinaryIO, version: Optional[Version] = None
+            self, sga_stream: BinaryIO, version: Optional[Version] = None
     ) -> EssenceFSHandler:
         if version is None:
             version = self._read_magic_and_version(sga_stream)
         return self._get_handler(version)
 
     def _get_handler_from_fs(
-        self, sga_fs: EssenceFS, version: Optional[Version] = None
+            self, sga_fs: EssenceFS, version: Optional[Version] = None
     ) -> EssenceFSHandler:
         if version is None:
             sga_version: Dict[str, int] = sga_fs.getmeta("essence").get("version")  # type: ignore
@@ -161,16 +161,16 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
         return self._get_handler(version)
 
     def read(
-        self, sga_stream: BinaryIO, version: Optional[Version] = None
+            self, sga_stream: BinaryIO, version: Optional[Version] = None
     ) -> EssenceFS:
         handler = self._get_handler_from_stream(sga_stream, version)
         return handler.read(sga_stream)
 
     def write(
-        self,
-        sga_stream: BinaryIO,
-        sga_fs: EssenceFS,
-        version: Optional[Version] = None,
+            self,
+            sga_stream: BinaryIO,
+            sga_fs: EssenceFS,
+            version: Optional[Version] = None,
     ) -> int:
         handler = self._get_handler_from_fs(sga_fs, version)
         return handler.write(sga_stream, sga_fs)
@@ -190,17 +190,20 @@ class EssenceFSOpener(Opener):
     protocols = ["sga"]
 
     def open_fs(
-        self,
-        fs_url: str,
-        parse_result: ParseResult,
-        writeable: bool,
-        create: bool,
-        cwd: str,
+            self,
+            fs_url: str,
+            parse_result: ParseResult,
+            writeable: bool,
+            create: bool,
+            cwd: str,
+            parent_fs: Optional[FS] = None,
     ) -> FS:
         # All EssenceFS should be writable; so we can ignore that
 
         # Resolve Path
         if fs_url == "sga://":
+            if parent_fs is not None:
+                raise fs.opener.errors.OpenerError("Trying to open a memory EssenceFS inside a parent file system!")
             if create:
                 return EssenceFS()
             else:
@@ -208,25 +211,35 @@ class EssenceFSOpener(Opener):
                     "No path was given and opener not marked for 'create'!"
                 )
 
-        _path = os.path.abspath(os.path.join(cwd, expanduser(parse_result.resource)))
-        path = os.path.normpath(_path)
-
-        # Create will always create a new EssenceFS if needed
-        try:
-            with open(path, "rb") as sga_file:
-                return self.factory.read(sga_file)
-        except FileNotFoundError as e:
-            if create:
-                return EssenceFS()
-            else:
-                raise
+        if parent_fs is None:
+            _path = os.path.abspath(os.path.join(cwd, expanduser(parse_result.resource)))
+            path = os.path.normpath(_path)
+            # Create will always create a new EssenceFS if needed
+            try:
+                with open(path, "rb") as sga_file:
+                    return self.factory.read(sga_file)
+            except FileNotFoundError as e:
+                if create:
+                    return EssenceFS()
+                else:
+                    raise
+        else:
+            try:
+                with parent_fs.opendir(cwd) as cwd_fs:
+                    with cwd_fs.openbin(parse_result.resource, "r") as sga_file:
+                        return self.factory.read(sga_file)
+            except fs.errors.ResourceNotFound as e:
+                if create:
+                    return EssenceFS()
+                else:
+                    raise
 
 
 fs_registry.install(EssenceFSOpener)
 
 
 def _open_fs(
-    fs_url: str, protocol: str, writeable: bool, create: bool, cwd: str, opener: Opener
+        fs_url: str, protocol: str, writeable: bool, create: bool, cwd: str, opener: Opener
 ) -> FS:
     if "://" not in fs_url:
         # URL may just be a path
@@ -238,25 +251,24 @@ def _open_fs(
 
 
 def open_sga(
-    fs_url: str,
-    writeable: bool = False,
-    create: bool = False,
-    cwd: str = ".",
-    registry: Optional[EssenceFSFactory] = None,
+        fs_url: Union[str, BinaryIO],
+        writeable: bool = False,
+        create: bool = False,
+        cwd: str = ".",
+        fs: Optional[FS] = None,
+        registry: Optional[EssenceFSFactory] = None,
 ) -> EssenceFS:
-    opener = EssenceFSOpener(registry)
-    essence_fs: EssenceFS = _open_fs(  # type:ignore
-        fs_url, opener.protocols[0], writeable, create, cwd, opener
-    )
+    if isinstance(fs_url, str):
+        opener = EssenceFSOpener(registry)
+        essence_fs: EssenceFS = _open_fs(  # type:ignore
+            fs_url, opener.protocols[0], writeable, create, cwd, opener
+        )
+    else:
+        if registry is None:
+            registry = sga_registry
+        return registry.read(fs_url)
+
     return essence_fs
-
-
-def open_sga_from_handle(
-    handle: BinaryIO, registry: Optional[EssenceFSFactory]
-) -> EssenceFS:
-    if registry is None:
-        registry = sga_registry
-    return registry.read(handle)
 
 
 class _EssenceFile(_MemoryFile):
@@ -272,9 +284,9 @@ class _EssenceDirEntry(_DirEntry):
         # type: (Optional[Collection[Text]]) -> Info
         info = super().to_info(namespaces)
         if (
-            namespaces is not None
-            and not self.is_dir
-            and ESSENCE_NAMESPACE in namespaces
+                namespaces is not None
+                and not self.is_dir
+                and ESSENCE_NAMESPACE in namespaces
         ):
             info_dict = dict(info.raw)
             info_dict[ESSENCE_NAMESPACE] = self.essence.copy()
@@ -288,7 +300,7 @@ class _EssenceDriveFS(MemoryFS):
         self.alias = alias
 
     def _make_dir_entry(
-        self, resource_type: ResourceType, name: str
+            self, resource_type: ResourceType, name: str
     ) -> _EssenceDirEntry:
         return _EssenceDirEntry(resource_type, name)
 
@@ -418,5 +430,4 @@ __all__ = [
     "registry",
     "EssenceFSOpener",
     "open_sga",
-    "open_sga_from_handle",
 ]
