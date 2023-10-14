@@ -250,8 +250,8 @@ class _EssenceDriveFS(MemoryFS):
     def validatepath(self, path: str) -> str:
         if ":" in path:
             parts = path.split(":", 1)
-            if parts[0][0] == "/":
-                parts[0] = parts[0][1:]
+            if parts[0].replace("\\","/")[0] == "/":
+                parts[0] = parts[0].replace("\\","/")[1:]
             if parts[0] != self.alias:
                 raise fs.errors.InvalidPath(
                     path,
@@ -260,7 +260,7 @@ class _EssenceDriveFS(MemoryFS):
             fixed_path = parts[1]
         else:
             fixed_path = path
-        return super().validatepath(fixed_path)
+        return super().validatepath(fixed_path).replace("\\","/")
 
     def setinfo(self, path: str, info: Mapping[str, Mapping[str, object]]) -> None:
         _path = self.validatepath(path)
