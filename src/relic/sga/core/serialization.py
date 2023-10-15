@@ -520,7 +520,7 @@ class FSDisassembler(Generic[TFileDef]):
         folder_name = str(path).split(":", 1)[-1]  # Strip 'alias:' from path
 
         if folder_name[0] == "/":
-            folder_name = folder_name[1:] # strip leading '/'
+            folder_name = folder_name[1:]  # strip leading '/'
 
         folder_def.name_pos = _get_or_write_name(
             folder_name, self.name_stream, self.flat_names
