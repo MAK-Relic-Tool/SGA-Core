@@ -3,14 +3,13 @@ from __future__ import annotations
 from argparse import ArgumentParser, Namespace
 from typing import Optional
 
+import fs.copy
+from fs.base import FS
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin
 
 
 class RelicSgaCli(CliPluginGroup):
     GROUP = "relic.cli.sga"
-
-    def __init__(self, parent: _SubParsersAction, **kwargs):
-        super().__init__(parent, **kwargs)
 
     def _create_parser(self, command_group: Optional[_SubParsersAction] = None) -> ArgumentParser:
         if command_group is None:
@@ -28,15 +27,27 @@ class RelicSgaUnpackCli(CliPlugin):
         else:
             parser = command_group.add_parser("unpack")
 
-        # TODO populate parser
+        parser.add_argument("src_sga", type=str, help="Source SGA File")
+        parser.add_argument("out_dir", type=str, help="Output Directory")
 
         return parser
 
     def command(self, ns: Namespace) -> Optional[int]:
-        raise NotImplementedError
+        infile: str = ns.src_sga
+        outdir: str = ns.out_dir
+
+        print(f"Unpacking `{infile}`")
+
+        def _callback(_1: FS, srcfile: str, _2: FS, _3: str):
+            print(f"\t\tUnpacking File `{srcfile}`")
+
+        fs.copy.copy_fs(f"sga://{infile}", f"osfs://{outdir}", on_copy=_callback)
+
+        return None  # To shut-up mypy
 
 
-class RelicSgaPackCli(CliPlugin):
+class RelicSgaPackCli(CliPluginGroup):
+    GROUP = "relic.cli.sga.pack"
 
     def _create_parser(self, command_group: Optional[_SubParsersAction] = None) -> ArgumentParser:
         parser: ArgumentParser
@@ -45,9 +56,7 @@ class RelicSgaPackCli(CliPlugin):
         else:
             parser = command_group.add_parser("pack")
 
-        # TODO populate parser
+        # pack further delegates to version plugins
 
         return parser
 
-    def command(self, ns: Namespace) -> Optional[int]:
-        raise NotImplementedError
