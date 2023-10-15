@@ -28,6 +28,8 @@ from fs.multifs import MultiFS
 from fs.opener import Opener, registry as fs_registry
 from fs.opener.parse import ParseResult
 from fs.path import split
+from fs.permissions import Permissions
+from fs.subfs import SubFS
 
 from relic.sga.core.definitions import Version, MagicWord, _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
@@ -292,6 +294,15 @@ class _EssenceDriveFS(MemoryFS):
 
     def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
+
+    def makedirs(
+        self,
+        path,  # type: Text
+        permissions=None,  # type: Optional[Permissions]
+        recreate=False,  # type: bool
+    ):  # type: (...) -> SubFS[FS]
+        _path = path.replace("\\", "/")  # Coerce path seperator
+        return super().makedirs(_path, permissions, recreate)
 
 
 class EssenceFS(MultiFS):
