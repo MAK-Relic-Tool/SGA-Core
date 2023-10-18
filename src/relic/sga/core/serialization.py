@@ -220,6 +220,8 @@ def _write_data(data: bytes, stream: BinaryIO) -> int:
 
 
 def _get_or_write_name(name: str, stream: BinaryIO, lookup: Dict[str, int]) -> int:
+    # Tools don't like "/" so coerce "/" to "\"
+    name = name.replace("/","\\")
     if name in lookup:
         return lookup[name]
 
@@ -775,6 +777,8 @@ class EssenceFSSerializer(
             gen_empty_meta: Callable[[], TMetaBlock],
             finalize_meta: Callable[[BinaryIO, TMetaBlock], None],
             meta2def: Callable[[Dict[str, object]], TFileDef],
+            assembler:Type[FSAssembler[TFileDef]] = None,
+            disassembler: Type[FSDisassembler[TFileDef]] = None,
     ):
         self.version = version
         self.meta_serializer = meta_serializer
@@ -787,6 +791,8 @@ class EssenceFSSerializer(
         self.gen_empty_meta = gen_empty_meta
         self.finalize_meta = finalize_meta
         self.meta2def = meta2def
+        self.assembler_type = assembler or FSAssembler
+        self.disassembler_type = disassembler or FSDisassembler
 
     def read(self, stream: BinaryIO) -> EssenceFS:
         # Magic & Version; skippable so that we can check for a valid file and read the version elsewhere
@@ -808,7 +814,7 @@ class EssenceFSSerializer(
         name, metadata = meta_block.name, self.assemble_meta(
             stream, meta_block, toc_meta_block
         )
-        assembler: FSAssembler[TFileDef] = FSAssembler(
+        assembler: FSAssembler[TFileDef] = self.assembler_type(
             stream=stream,
             ptrs=meta_block.ptrs,
             toc=toc_block,
@@ -841,7 +847,7 @@ class EssenceFSSerializer(
             with BytesIO() as data_stream:
                 with BytesIO() as toc_stream:
                     with BytesIO() as name_stream:
-                        disassembler = FSDisassembler(
+                        disassembler:FSDisassembler[TFileDef] = self.disassembler_type(
                             fs=essence_fs,
                             toc_stream=toc_stream,
                             data_stream=data_stream,

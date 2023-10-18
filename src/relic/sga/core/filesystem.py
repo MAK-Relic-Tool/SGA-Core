@@ -342,7 +342,8 @@ class EssenceFS(MultiFS):
 
     def create_drive(self, alias: str, name:str) -> _EssenceDriveFS:
         drive = _EssenceDriveFS(alias, name)
-        self.add_fs(alias, drive) # TODO see if name would work here, using alias because that is what it originally was
+        first_drive = len([*self.iterate_fs()]) == 0
+        self.add_fs(alias, drive, write=first_drive) # TODO see if name would work here, using alias because that is what it originally was
         return drive
 
     def _delegate(self, path):
