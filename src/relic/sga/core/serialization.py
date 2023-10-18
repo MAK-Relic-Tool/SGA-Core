@@ -399,7 +399,7 @@ class FSAssembler(Generic[TFileDef]):
         drive_folder_index = drive_def.root_folder - folder_offset
         drive_folder_def = local_folder_defs[drive_folder_index]
 
-        drive = essence_fs.create_drive(drive_def.alias)
+        drive = essence_fs.create_drive(drive_def.alias, drive_def.name)
         self._assemble_container(
             drive,
             drive_folder_def.file_range,
@@ -511,38 +511,45 @@ class FSDisassembler(Generic[TFileDef]):
     def disassemble_folder(self, folder_fs: FS, path: str) -> FolderDef:
         folder_def = FolderDef(None, None, None)  # type: ignore
 
-        # Subfiles
-        subfile_range = self.flatten_file_collection(folder_fs)
+        # Write Name
+
+        folder_name = str(path).split(":", 1)[-1]  # Strip 'alias:' from path
+        if folder_name[0] == "/":
+            folder_name = folder_name[1:]  # strip leading '/'
+        folder_def.name_pos = _get_or_write_name(
+            folder_name, self.name_stream, self.flat_names
+        )
+
         # Subfolders
         # # Since Relic typically uses the first folder as the root folder; I will try to preserve that parent folders come before their child folders
         subfolder_range = self.flatten_folder_collection(folder_fs, path)
 
-        folder_name = str(path).split(":", 1)[-1]  # Strip 'alias:' from path
+        # Subfiles
+        subfile_range = self.flatten_file_collection(folder_fs)
 
-        if folder_name[0] == "/":
-            folder_name = folder_name[1:]  # strip leading '/'
 
-        folder_def.name_pos = _get_or_write_name(
-            folder_name, self.name_stream, self.flat_names
-        )
+
         folder_def.file_range = subfile_range
         folder_def.folder_range = subfolder_range
 
         return folder_def
 
-    def disassemble_drive(self, drive: _EssenceDriveFS, alias: str) -> DriveDef:
-        name = ""
+    def disassemble_drive(self, drive: _EssenceDriveFS) -> DriveDef:
+        name = drive.name
+        folder_name = ""
+        alias = drive.alias
         drive_folder_def = FolderDef(None, None, None)  # type: ignore
         root_folder = len(self.flat_folders)
         folder_start = len(self.flat_folders)
         file_start = len(self.flat_files)
         self.flat_folders.append(drive_folder_def)
 
+        # Name should be an empty string?
         drive_folder_def.name_pos = _get_or_write_name(
-            name, self.name_stream, self.flat_names
+            folder_name, self.name_stream, self.flat_names
         )
         drive_folder_def.file_range = self.flatten_file_collection(drive)
-        drive_folder_def.folder_range = self.flatten_folder_collection(drive, name)
+        drive_folder_def.folder_range = self.flatten_folder_collection(drive, folder_name)
 
         folder_end = len(self.flat_folders)
         file_end = len(self.flat_files)
@@ -593,9 +600,9 @@ class FSDisassembler(Generic[TFileDef]):
         )
 
     def disassemble(self) -> TocBlock:
-        for name, drive_fs in self.fs.iterate_fs():
+        for _, drive_fs in self.fs.iterate_fs():
             drive_fs = typing.cast(_EssenceDriveFS, drive_fs)
-            drive_def = self.disassemble_drive(drive_fs, name)
+            drive_def = self.disassemble_drive(drive_fs)
             self.flat_drives.append(drive_def)
 
         return self.write_toc()

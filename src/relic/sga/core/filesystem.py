@@ -240,9 +240,10 @@ class _EssenceDirEntry(_DirEntry):
 
 
 class _EssenceDriveFS(MemoryFS):
-    def __init__(self, alias: str) -> None:
+    def __init__(self, alias: str, name:str) -> None:
         super().__init__()
         self.alias = alias
+        self.name = name
 
     def _make_dir_entry(
         self, resource_type: ResourceType, name: str
@@ -289,8 +290,23 @@ class _EssenceDriveFS(MemoryFS):
                 resource_entry.essence.clear()
                 resource_entry.essence.update(essence)
 
+
+
             # if LAZY_NAMESPACE in info and not resource_entry.is_dir:
             #     lazy
+
+    def getinfo(self, path, namespaces=None):  # type: (Text, Optional[Collection[Text]]) -> Info
+        info = super().getinfo(path,namespaces)
+
+        _path = self.validatepath(path)
+        if _path == "/" and (namespaces is not None and ESSENCE_NAMESPACE in namespaces):
+            raw_info = info.raw
+            raw_info[ESSENCE_NAMESPACE]["alias"] = self.alias
+            raw_info[ESSENCE_NAMESPACE]["name"] = self.name
+            info = Info(raw_info)
+        return info
+
+
 
     def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
@@ -324,9 +340,9 @@ class EssenceFS(MultiFS):
     def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
 
-    def create_drive(self, name: str) -> _EssenceDriveFS:
-        drive = _EssenceDriveFS(name)
-        self.add_fs(name, drive)
+    def create_drive(self, alias: str, name:str) -> _EssenceDriveFS:
+        drive = _EssenceDriveFS(alias, name)
+        self.add_fs(alias, drive) # TODO see if name would work here, using alias because that is what it originally was
         return drive
 
     def _delegate(self, path):
@@ -338,40 +354,6 @@ class EssenceFS(MultiFS):
             return self.get_fs(parts[0])
 
         return super()._delegate(path)
-
-
-# if __name__ == "__main__":
-#     test_file = File("test.txt", b"This is a Test!", StorageType.STORE, False, None)
-#     test_folder = Folder("Test", [], [test_file])
-#     data_folders = [test_folder]
-#     data_files = []
-#     data_drive = Drive("data", "", data_folders, data_files)
-#     attr_drive = Drive("attr", "", [], [test_file])
-#     archive = Archive("Test", None, [data_drive, attr_drive])
-#
-#     with SGAFS() as fs:
-#         data_fs = MemoryFS()
-#         fs.add_fs("data", data_fs)
-#         data_dir = data_fs.makedir("Test Data")
-#         with data_dir.open("sample_data.txt", "wb") as data_sample_text:
-#             data_sample_text.write(b"Sample Data Text!")
-#
-#         attr_fs = MemoryFS()
-#         fs.add_fs("attr", attr_fs)
-#         attr_dir = attr_fs.makedir("Test Attr")
-#         with attr_dir.open("sample_attr.txt", "wb") as attr_sample_text:
-#             attr_sample_text.write(b"Sample Attr Text!")
-#
-#         for root, folders, files in fs.walk():
-#             print(root, "\n\t", folders, "\n\t", files)
-#
-#         for name, sub_fs in fs.iterate_fs():
-#             print(name)
-#             for root, folders, files in sub_fs.walk():
-#                 print("\t", root, "\n\t\t", folders, "\n\t\t", files)
-#
-#         print(fs.getinfo("/", ["basic", "access"]).raw)
-#     pass
 
 __all__ = [
     "ESSENCE_NAMESPACE",

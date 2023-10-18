@@ -44,7 +44,7 @@ _CHUNK_SIZE = 1024 * 1024 * 16  # 16 MiB
 
 
 def _pack_fake_osfs(osfs: FS, name: str) -> EssenceFS:
-    # Create 'SGA'
+    # Create 'SGA' V2
     sga = EssenceFS()
     sga.setmeta(
         {
