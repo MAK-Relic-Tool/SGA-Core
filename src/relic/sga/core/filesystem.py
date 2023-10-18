@@ -240,7 +240,7 @@ class _EssenceDirEntry(_DirEntry):
 
 
 class _EssenceDriveFS(MemoryFS):
-    def __init__(self, alias: str, name:str) -> None:
+    def __init__(self, alias: str, name: str) -> None:
         super().__init__()
         self.alias = alias
         self.name = name
@@ -290,23 +290,24 @@ class _EssenceDriveFS(MemoryFS):
                 resource_entry.essence.clear()
                 resource_entry.essence.update(essence)
 
-
-
             # if LAZY_NAMESPACE in info and not resource_entry.is_dir:
             #     lazy
 
-    def getinfo(self, path, namespaces=None):  # type: (Text, Optional[Collection[Text]]) -> Info
-        info = super().getinfo(path,namespaces)
+    def getinfo(
+        self, path, namespaces=None
+    ):  # type: (Text, Optional[Collection[Text]]) -> Info
+        info = super().getinfo(path, namespaces)
 
         _path = self.validatepath(path)
-        if _path == "/" and (namespaces is not None and ESSENCE_NAMESPACE in namespaces):
+        if _path == "/" and (
+            namespaces is not None and ESSENCE_NAMESPACE in namespaces
+        ):
             raw_info = info.raw
-            raw_info[ESSENCE_NAMESPACE]["alias"] = self.alias
-            raw_info[ESSENCE_NAMESPACE]["name"] = self.name
+            essence_ns = dict(raw_info[ESSENCE_NAMESPACE])
+            essence_ns["alias"] = self.alias
+            essence_ns["name"] = self.name
             info = Info(raw_info)
         return info
-
-
 
     def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
@@ -340,10 +341,12 @@ class EssenceFS(MultiFS):
     def getessence(self, path: str) -> Info:
         return self.getinfo(path, [ESSENCE_NAMESPACE])
 
-    def create_drive(self, alias: str, name:str) -> _EssenceDriveFS:
+    def create_drive(self, alias: str, name: str) -> _EssenceDriveFS:
         drive = _EssenceDriveFS(alias, name)
         first_drive = len([*self.iterate_fs()]) == 0
-        self.add_fs(alias, drive, write=first_drive) # TODO see if name would work here, using alias because that is what it originally was
+        self.add_fs(
+            alias, drive, write=first_drive
+        )  # TODO see if name would work here, using alias because that is what it originally was
         return drive
 
     def _delegate(self, path):
@@ -355,6 +358,7 @@ class EssenceFS(MultiFS):
             return self.get_fs(parts[0])
 
         return super()._delegate(path)
+
 
 __all__ = [
     "ESSENCE_NAMESPACE",

@@ -9,11 +9,19 @@ from contextlib import redirect_stderr
 import pytest
 
 _ARGS = [
-    (["sga","unpack","nonexistant.sga","."],"error: argument src_sga: The given path 'nonexistant.sga' does not exist!" ),
-    (["sga", "unpack", __file__, __file__], rf"error: argument out_dir: The given path '{__file__}' is not a directory!")
+    (
+        ["sga", "unpack", "nonexistant.sga", "."],
+        "error: argument src_sga: The given path 'nonexistant.sga' does not exist!",
+    ),
+    (
+        ["sga", "unpack", __file__, __file__],
+        rf"error: argument out_dir: The given path '{__file__}' is not a directory!",
+    ),
 ]
-@pytest.mark.parametrize(["args","msg"],_ARGS)
-def test_argparse_error(args:Sequence[str], msg:str):
+
+
+@pytest.mark.parametrize(["args", "msg"], _ARGS)
+def test_argparse_error(args: Sequence[str], msg: str):
     from relic.core.cli import cli_root
 
     with io.StringIO() as f:
@@ -22,7 +30,5 @@ def test_argparse_error(args:Sequence[str], msg:str):
             assert status == 2
         f.seek(0)
         err = f.read()
-        print (err)
+        print(err)
         assert msg in err
-
-

@@ -57,13 +57,14 @@ def _pack_fake_osfs(osfs: FS, name: str) -> EssenceFS:
         "essence",
     )
 
-    alias = "test"
+    alias = "data"
+    name = "test data"
     sga_drive = None  # sga.create_drive(alias)
     for path in osfs.walk.files():
         if (
             sga_drive is None
         ):  # Lazily create drive, to avoid empty drives from being created
-            sga_drive = sga.create_drive(alias)
+            sga_drive = sga.create_drive(alias, name)
 
         if "stream" in path:
             storage = StorageType.STREAM_COMPRESS
