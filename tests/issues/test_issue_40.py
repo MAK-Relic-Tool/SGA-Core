@@ -3,7 +3,7 @@ TestCases for more explicit errors when providing invalid path arguments.
 https://github.com/MAK-Relic-Tool/Issue-Tracker/issues/40
 """
 import io
-from collections import Sequence
+from typing import Iterable
 from contextlib import redirect_stderr
 
 import pytest
@@ -21,7 +21,7 @@ _ARGS = [
 
 
 @pytest.mark.parametrize(["args", "msg"], _ARGS)
-def test_argparse_error(args: Sequence[str], msg: str):
+def test_argparse_error(args: Iterable[str], msg: str):
     from relic.core.cli import cli_root
 
     with io.StringIO() as f:
