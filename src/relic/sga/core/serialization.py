@@ -5,7 +5,6 @@ import typing
 import zlib
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import PurePath
 from typing import (
     BinaryIO,
     List,
@@ -364,11 +363,11 @@ class FSAssembler(Generic[TFileDef]):
         folder_offset: int,
     ) -> FS:
         raw_folder_name = self.names[folder_def.name_pos]
-        folder_name_as_path = PurePath(raw_folder_name)
+        folder_name_as_path = raw_folder_name.split(
+            "\\"
+        )  # We could gaurd against '/' but because the official relic mod tools crap themselves, we'll crap ourselves too. # TODO, instead of crappign ourselves, maybe produce a decent error? instead of relying on ResourceNotFound?
         folder_name = (
-            folder_name_as_path.parts[-1]
-            if len(folder_name_as_path.parts) > 0
-            else raw_folder_name
+            folder_name_as_path[-1] if len(folder_name_as_path) > 0 else raw_folder_name
         )
 
         folder = parent_dir.makedir(folder_name)
