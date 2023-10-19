@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import os.path
 from argparse import ArgumentParser, Namespace
-from typing import Optional
+from typing import Optional, Callable
 
 import fs.copy
 from fs.base import FS
@@ -20,6 +22,42 @@ class RelicSgaCli(CliPluginGroup):
             return command_group.add_parser("sga")
 
 
+def _arg_exists_err(value: str) -> argparse.ArgumentTypeError:
+    return argparse.ArgumentTypeError(f"The given path '{value}' does not exist!")
+
+
+def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
+    def _dir_type(path: str) -> str:
+        if not os.path.exists(path):
+            if exists:
+                raise _arg_exists_err(path)
+            else:
+                return path
+
+        if os.path.isdir(path):
+            return path
+
+        raise argparse.ArgumentTypeError(f"The given path '{path}' is not a directory!")
+
+    return _dir_type
+
+
+def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
+    def _file_type(path: str) -> str:
+        if not os.path.exists(path):
+            if exists:
+                raise _arg_exists_err(path)
+            else:
+                return path
+
+        if os.path.isfile(path):
+            return path
+
+        raise argparse.ArgumentTypeError(f"The given path '{path}' is not a file!")
+
+    return _file_type
+
+
 class RelicSgaUnpackCli(CliPlugin):
     def _create_parser(
         self, command_group: Optional[_SubParsersAction] = None
@@ -30,8 +68,16 @@ class RelicSgaUnpackCli(CliPlugin):
         else:
             parser = command_group.add_parser("unpack")
 
-        parser.add_argument("src_sga", type=str, help="Source SGA File")
-        parser.add_argument("out_dir", type=str, help="Output Directory")
+        parser.add_argument(
+            "src_sga",
+            type=_get_file_type_validator(exists=True),
+            help="Source SGA File",
+        )
+        parser.add_argument(
+            "out_dir",
+            type=_get_dir_type_validator(exists=False),
+            help="Output Directory",
+        )
 
         return parser
 
@@ -60,6 +106,26 @@ class RelicSgaPackCli(CliPluginGroup):
             parser = ArgumentParser("pack")
         else:
             parser = command_group.add_parser("pack")
+
+        # pack further delegates to version plugins
+
+        return parser
+
+
+class RelicSgaRepackCli(CliPluginGroup):
+    """An alternative to pack which 'repacks' an SGA. Intended for testing purposes."""
+
+    GROUP = "relic.cli.sga.repack"
+
+    def _create_parser(
+        self, command_group: Optional[_SubParsersAction] = None
+    ) -> ArgumentParser:
+        parser: ArgumentParser
+        desc = "Debug Command; reads and repacks an SGA archive."
+        if command_group is None:
+            parser = ArgumentParser("repack", description=desc)
+        else:
+            parser = command_group.add_parser("repack", description=desc)
 
         # pack further delegates to version plugins
 

@@ -16,6 +16,7 @@ from typing import (
     Iterable,
     TypeVar,
     Generic,
+    Type,
 )
 
 from fs.base import FS
@@ -220,6 +221,8 @@ def _write_data(data: bytes, stream: BinaryIO) -> int:
 
 
 def _get_or_write_name(name: str, stream: BinaryIO, lookup: Dict[str, int]) -> int:
+    # Tools don't like "/" so coerce "/" to "\"
+    name = name.replace("/", "\\")
     if name in lookup:
         return lookup[name]
 
@@ -399,7 +402,7 @@ class FSAssembler(Generic[TFileDef]):
         drive_folder_index = drive_def.root_folder - folder_offset
         drive_folder_def = local_folder_defs[drive_folder_index]
 
-        drive = essence_fs.create_drive(drive_def.alias)
+        drive = essence_fs.create_drive(drive_def.alias, drive_def.name)
         self._assemble_container(
             drive,
             drive_folder_def.file_range,
@@ -508,41 +511,70 @@ class FSDisassembler(Generic[TFileDef]):
         self.flat_folders[subfolder_start:subfolder_end] = subfolder_defs
         return subfolder_start, subfolder_end
 
+    def _flatten_folder_names(self, fs: FS, path: str) -> None:
+        folders = [file_info.name for file_info in fs.scandir("/") if file_info.is_dir]
+        files = [file_info.name for file_info in fs.scandir("/") if file_info.is_file]
+
+        if len(path) > 0 and path[0] == "/":
+            path = path[1:]  # strip leading '/'
+        _get_or_write_name(path, self.name_stream, self.flat_names)
+
+        for fold_path in folders:
+            full_fold_path = f"{path}/{fold_path}"
+            full_fold_path = str(full_fold_path).split(":", 1)[
+                -1
+            ]  # Strip 'alias:' from path
+            if full_fold_path[0] == "/":
+                full_fold_path = full_fold_path[1:]  # strip leading '/'
+            _get_or_write_name(full_fold_path, self.name_stream, self.flat_names)
+
+        for file_path in files:
+            _get_or_write_name(file_path, self.name_stream, self.flat_names)
+
     def disassemble_folder(self, folder_fs: FS, path: str) -> FolderDef:
         folder_def = FolderDef(None, None, None)  # type: ignore
+        # Write Name
+        self._flatten_folder_names(folder_fs, path)
 
-        # Subfiles
-        subfile_range = self.flatten_file_collection(folder_fs)
+        folder_name = str(path).split(":", 1)[-1]  # Strip 'alias:' from path
+        if folder_name[0] == "/":
+            folder_name = folder_name[1:]  # strip leading '/'
+        folder_def.name_pos = _get_or_write_name(
+            folder_name, self.name_stream, self.flat_names
+        )
+
         # Subfolders
         # # Since Relic typically uses the first folder as the root folder; I will try to preserve that parent folders come before their child folders
         subfolder_range = self.flatten_folder_collection(folder_fs, path)
 
-        folder_name = str(path).split(":", 1)[-1]  # Strip 'alias:' from path
+        # Subfiles
+        subfile_range = self.flatten_file_collection(folder_fs)
 
-        if folder_name[0] == "/":
-            folder_name = folder_name[1:]  # strip leading '/'
-
-        folder_def.name_pos = _get_or_write_name(
-            folder_name, self.name_stream, self.flat_names
-        )
         folder_def.file_range = subfile_range
         folder_def.folder_range = subfolder_range
 
         return folder_def
 
-    def disassemble_drive(self, drive: _EssenceDriveFS, alias: str) -> DriveDef:
-        name = ""
+    def disassemble_drive(self, drive: _EssenceDriveFS) -> DriveDef:
+        name = drive.name
+        folder_name = ""
+        alias = drive.alias
         drive_folder_def = FolderDef(None, None, None)  # type: ignore
+        self._flatten_folder_names(drive, folder_name)
+
         root_folder = len(self.flat_folders)
         folder_start = len(self.flat_folders)
         file_start = len(self.flat_files)
         self.flat_folders.append(drive_folder_def)
 
+        # Name should be an empty string?
         drive_folder_def.name_pos = _get_or_write_name(
-            name, self.name_stream, self.flat_names
+            folder_name, self.name_stream, self.flat_names
         )
         drive_folder_def.file_range = self.flatten_file_collection(drive)
-        drive_folder_def.folder_range = self.flatten_folder_collection(drive, name)
+        drive_folder_def.folder_range = self.flatten_folder_collection(
+            drive, folder_name
+        )
 
         folder_end = len(self.flat_folders)
         file_end = len(self.flat_files)
@@ -593,9 +625,9 @@ class FSDisassembler(Generic[TFileDef]):
         )
 
     def disassemble(self) -> TocBlock:
-        for name, drive_fs in self.fs.iterate_fs():
+        for _, drive_fs in self.fs.iterate_fs():
             drive_fs = typing.cast(_EssenceDriveFS, drive_fs)
-            drive_def = self.disassemble_drive(drive_fs, name)
+            drive_def = self.disassemble_drive(drive_fs)
             self.flat_drives.append(drive_def)
 
         return self.write_toc()
@@ -740,6 +772,8 @@ class EssenceFSSerializer(
         gen_empty_meta: Callable[[], TMetaBlock],
         finalize_meta: Callable[[BinaryIO, TMetaBlock], None],
         meta2def: Callable[[Dict[str, object]], TFileDef],
+        assembler: Optional[Type[FSAssembler[TFileDef]]] = None,
+        disassembler: Optional[Type[FSDisassembler[TFileDef]]] = None,
     ):
         self.version = version
         self.meta_serializer = meta_serializer
@@ -752,6 +786,8 @@ class EssenceFSSerializer(
         self.gen_empty_meta = gen_empty_meta
         self.finalize_meta = finalize_meta
         self.meta2def = meta2def
+        self.assembler_type = assembler or FSAssembler
+        self.disassembler_type = disassembler or FSDisassembler
 
     def read(self, stream: BinaryIO) -> EssenceFS:
         # Magic & Version; skippable so that we can check for a valid file and read the version elsewhere
@@ -773,7 +809,7 @@ class EssenceFSSerializer(
         name, metadata = meta_block.name, self.assemble_meta(
             stream, meta_block, toc_meta_block
         )
-        assembler: FSAssembler[TFileDef] = FSAssembler(
+        assembler: FSAssembler[TFileDef] = self.assembler_type(
             stream=stream,
             ptrs=meta_block.ptrs,
             toc=toc_block,
@@ -806,7 +842,7 @@ class EssenceFSSerializer(
             with BytesIO() as data_stream:
                 with BytesIO() as toc_stream:
                     with BytesIO() as name_stream:
-                        disassembler = FSDisassembler(
+                        disassembler: FSDisassembler[TFileDef] = self.disassembler_type(
                             fs=essence_fs,
                             toc_stream=toc_stream,
                             data_stream=data_stream,

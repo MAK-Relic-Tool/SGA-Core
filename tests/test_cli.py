@@ -31,7 +31,7 @@ class CommandTests:
             assert status == exit_code
 
 
-_SGA_HELP = ["sga", "-h"], """usage: relic sga [-h] {pack,unpack} ...""", 0
+_SGA_HELP = ["sga", "-h"], """usage: relic sga [-h] {pack,repack,unpack} ...""", 0
 _SGA_PACK_HELP = ["sga", "pack", "-h"], """usage: relic sga pack [-h] {} ...""", 0
 _SGA_UNPACK_HELP = ["sga", "unpack", "-h"], """usage: relic sga unpack [-h]""", 0
 
