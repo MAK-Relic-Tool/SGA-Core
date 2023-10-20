@@ -157,10 +157,16 @@ class RelicSgaInfoCli(CliPlugin):
             "log_file",
             nargs="?",
             type=_get_file_type_validator(exists=False),
-            help="Optional file to write messages to",
+            help="Optional file to write messages to, required if `-q/--quiet` is used",
             default=None,
         )
-        parser.add_argument("-q", "--quiet", action="store_true", default=False)
+        parser.add_argument(
+            "-q",
+            "--quiet",
+            action="store_true",
+            default=False,
+            help="When specified, SGA info is not printed to the console",
+        )
         return parser
 
     def command(self, ns: Namespace) -> Optional[int]:
@@ -178,6 +184,12 @@ class RelicSgaInfoCli(CliPlugin):
                 outputs.append(None)  # None is a sentinel for stdout
             if logger is not None:
                 outputs.append(logger)
+
+            if len(outputs) == 0:
+                print(
+                    "Please specify a `log_file` if using the `-q` or `--quiet` command"
+                )
+                return 1
 
             def _print(
                 *msg: str, sep: Optional[str] = None, end: Optional[str] = None
