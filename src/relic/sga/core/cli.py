@@ -241,25 +241,25 @@ class RelicSgaInfoCli(CliPlugin):
                         # We alter storage_type cause it *should* always be present, if its not, we dont do anything
                         key = "storage_type"
                         if key in finfo:
-                            v: int = finfo[key]
-                            st: StorageType = StorageType(v)
-                            finfo[key] = f"{v} ({st.name})"
+                            stv: int = finfo[key]
+                            st: StorageType = StorageType(stv)
+                            finfo[key] = f"{stv} ({st.name})"
 
                         # We alter modified too, cause when it is present, its garbage
                         key = "modified"
                         if key in finfo:
-                            v: int = finfo[key]
+                            mtv: int = finfo[key]
                             mt = datetime.datetime.fromtimestamp(
-                                v, datetime.timezone.utc
+                                mtv, datetime.timezone.utc
                             )
                             finfo[key] = str(mt)
 
                         # And CRC32 if it's in bytes; this should be removed ASAP tho # I only put this in because its such a minor patch to V2
                         key = "crc32"
                         if key in finfo:
-                            v: bytes = finfo[key]
-                            if isinstance(v, bytes):
-                                crc32 = int.from_bytes(v, "little", signed=False)
+                            crcv: bytes = finfo[key]
+                            if isinstance(crcv, bytes):
+                                crc32 = int.from_bytes(crcv, "little", signed=False)
                                 finfo[key] = crc32
 
                         if len(finfo) > 0:
