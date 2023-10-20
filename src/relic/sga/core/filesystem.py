@@ -228,10 +228,7 @@ class _EssenceDirEntry(_DirEntry):
     def to_info(self, namespaces=None):
         # type: (Optional[Collection[Text]]) -> Info
         info = super().to_info(namespaces)
-        if (
-            namespaces is not None
-            and ESSENCE_NAMESPACE in namespaces
-        ):
+        if namespaces is not None and ESSENCE_NAMESPACE in namespaces:
             info_dict = dict(info.raw)
             info_dict[ESSENCE_NAMESPACE] = self.essence.copy()
             info = Info(info_dict)
