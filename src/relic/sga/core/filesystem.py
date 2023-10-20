@@ -228,11 +228,7 @@ class _EssenceDirEntry(_DirEntry):
     def to_info(self, namespaces=None):
         # type: (Optional[Collection[Text]]) -> Info
         info = super().to_info(namespaces)
-        if (
-            namespaces is not None
-            and not self.is_dir
-            and ESSENCE_NAMESPACE in namespaces
-        ):
+        if namespaces is not None and ESSENCE_NAMESPACE in namespaces:
             info_dict = dict(info.raw)
             info_dict[ESSENCE_NAMESPACE] = self.essence.copy()
             info = Info(info_dict)
@@ -302,8 +298,8 @@ class _EssenceDriveFS(MemoryFS):
         if _path == "/" and (
             namespaces is not None and ESSENCE_NAMESPACE in namespaces
         ):
-            raw_info = info.raw
-            essence_ns = dict(raw_info[ESSENCE_NAMESPACE])
+            raw_info = dict(info.raw)
+            essence_ns = raw_info[ESSENCE_NAMESPACE] = {}
             essence_ns["alias"] = self.alias
             essence_ns["name"] = self.name
             info = Info(raw_info)

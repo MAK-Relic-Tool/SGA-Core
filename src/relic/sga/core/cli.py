@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import os.path
 from argparse import ArgumentParser, Namespace
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, List, Any, Tuple, Set, TextIO
 
 import fs.copy
 from fs.base import FS
+from fs.multifs import MultiFS
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin
+
+from relic.sga.core.definitions import StorageType
+from relic.sga.core.filesystem import EssenceFS, _EssenceDriveFS
 
 
 class RelicSgaCli(CliPluginGroup):
@@ -130,3 +135,144 @@ class RelicSgaRepackCli(CliPluginGroup):
         # pack further delegates to version plugins
 
         return parser
+
+
+class RelicSgaInfoCli(CliPlugin):
+    def _create_parser(
+        self, command_group: Optional[_SubParsersAction] = None
+    ) -> ArgumentParser:
+        parser: ArgumentParser
+        description = "Dumps metadata packed into an SGA file."
+        if command_group is None:
+            parser = ArgumentParser("info", description=description)
+        else:
+            parser = command_group.add_parser("info", description=description)
+
+        parser.add_argument(
+            "sga",
+            type=_get_file_type_validator(exists=True),
+            help="SGA File to inspect",
+        )
+        parser.add_argument(
+            "log_file",
+            nargs="?",
+            type=_get_file_type_validator(exists=False),
+            help="Optional file to write messages to, required if `-q/--quiet` is used",
+            default=None,
+        )
+        parser.add_argument(
+            "-q",
+            "--quiet",
+            action="store_true",
+            default=False,
+            help="When specified, SGA info is not printed to the console",
+        )
+        return parser
+
+    def command(self, ns: Namespace) -> Optional[int]:
+        sga: str = ns.sga
+        log_file: str = ns.log_file
+        quiet: bool = ns.quiet
+
+        logger: Optional[TextIO] = None
+        try:
+            if log_file is not None:
+                logger = open(log_file, "w")
+
+            outputs: List[Optional[TextIO]] = []
+            if quiet is False:
+                outputs.append(None)  # None is a sentinel for stdout
+            if logger is not None:
+                outputs.append(logger)
+
+            if len(outputs) == 0:
+                print(
+                    "Please specify a `log_file` if using the `-q` or `--quiet` command"
+                )
+                return 1
+
+            def _print(
+                *msg: str, sep: Optional[str] = None, end: Optional[str] = None
+            ) -> None:
+                for output in outputs:
+                    print(*msg, sep=sep, end=end, file=output)
+
+            def _is_container(d: Any) -> bool:
+                return isinstance(d, (Dict, List, Tuple, Set))  # type: ignore
+
+            def _stringify(d: Any, indent: int = 0) -> None:
+                _TAB = "\t"
+                if isinstance(d, Dict):
+                    for k, v in d.items():
+                        if _is_container(v):
+                            _print(f"{_TAB * indent}{k}:")
+                            _stringify(v, indent + 1)
+                        else:
+                            _print(f"{_TAB * indent}{k}: {v}")
+                elif isinstance(d, (List, Tuple, Set)):  # type: ignore
+                    _print(f"{_TAB * indent}{', '.join(*d)}")
+                else:
+                    _print(f"{_TAB * indent}{d}")
+
+            def _getessence(fs: FS, path: str = "/") -> Dict[str, Any]:
+                return fs.getinfo(path, "essence").raw.get("essence", {})  # type: ignore
+
+            _print(f"File: `{sga}`")
+            sgafs: EssenceFS
+            with fs.open_fs(f"sga://{sga}") as sgafs:  # type: ignore
+                _print("Archive Metadata:")
+                _stringify(sgafs.getmeta("essence"), indent=1)
+
+                drive: _EssenceDriveFS
+                for alias, drive in sgafs.iterate_fs():  # type: ignore
+                    _print(f"Drive: `{drive.name}` (`{drive.alias}`)")
+                    _print("\tDrive Metadata:")
+                    info = _getessence(drive)
+                    if len(info) > 0:
+                        _stringify(info, indent=2)
+                    else:
+                        _print(f"\t\tNo Metadata")
+
+                    _print("\tDrive Files Metadata:")
+                    for f in drive.walk.files():
+                        _print(f"\t\t`{f}`:")
+                        finfo: Dict[str, Any] = _getessence(drive, f)
+                        finfo = finfo.copy()
+                        # We alter storage_type cause it *should* always be present, if its not, we dont do anything
+                        key = "storage_type"
+                        if key in finfo:
+                            stv: int = finfo[key]
+                            st: StorageType = StorageType(stv)
+                            finfo[key] = f"{stv} ({st.name})"
+
+                        # We alter modified too, cause when it is present, its garbage
+                        key = "modified"
+                        if key in finfo:
+                            mtv: int = finfo[key]
+                            mt = datetime.datetime.fromtimestamp(
+                                mtv, datetime.timezone.utc
+                            )
+                            finfo[key] = str(mt)
+
+                        # And CRC32 if it's in bytes; this should be removed ASAP tho # I only put this in because its such a minor patch to V2
+                        key = "crc32"
+                        if key in finfo:
+                            crcv: bytes = finfo[key]
+                            if isinstance(crcv, bytes):
+                                crc32 = int.from_bytes(crcv, "little", signed=False)
+                                finfo[key] = crc32
+
+                        if len(finfo) > 0:
+                            _stringify(finfo, indent=3)
+                        else:
+                            _print(f"\t\t\tNo Metadata")
+
+        finally:
+            if logger is not None:
+                logger.close()
+
+        if log_file is not None:
+            print(
+                f"Saved to `{os.path.join(os.getcwd(), log_file)}`"
+            )  # DO NOT USE _PRINT
+        return None
