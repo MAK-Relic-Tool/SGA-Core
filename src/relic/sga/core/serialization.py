@@ -489,6 +489,9 @@ class FSDisassembler(Generic[TFileDef]):
         ]
         self.flat_files.extend(subfile_defs)
         subfile_end = len(self.flat_files)
+
+        if subfile_start == subfile_end:
+            subfile_start = subfile_end = 0 #
         return subfile_start, subfile_end
 
     def flatten_folder_collection(self, container_fs: FS, path: str) -> Tuple[int, int]:
