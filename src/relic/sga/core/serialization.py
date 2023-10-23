@@ -296,15 +296,15 @@ class SgaTocInfoArea(Generic[T]):
     def __get_window(self, index: int) -> T:
         offset, count = self._info_offset, self._info_count
         if not (0 <= index < count):
-            raise IndexError(item, f"Valid indexes are ['{0}', '{count}')")
+            raise IndexError(index, f"Valid indexes are ['{0}', '{count}')")
 
         if index not in self._windows:
-            self._windows[item] = self._cls(
+            self._windows[index] = self._cls(
                 BinaryWindow(
                     self._parent,
-                    offset + self._cls._SIZE * item,
+                    offset + self._cls._SIZE * index,
                     self._cls._SIZE,
-                    name="SGA ToC Info Area ['{item}']",
+                    name=f"SGA ToC Info Area ['{index}']",
                 )
             )
 
