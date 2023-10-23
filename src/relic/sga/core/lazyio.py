@@ -31,6 +31,7 @@ class BinaryWrapper(BinaryIO):
     def __enter__(self) -> BinaryIO:
         return self
 
+    @property
     def name(self) -> str:
         return self._name or self._parent.name
 
