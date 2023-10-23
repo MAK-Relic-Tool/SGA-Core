@@ -8,11 +8,9 @@ from typing import Optional, Callable, Dict, List, Any, Tuple, Set, TextIO
 
 import fs.copy
 from fs.base import FS
-from fs.multifs import MultiFS
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin
 
 from relic.sga.core.definitions import StorageType
-from relic.sga.core.filesystem import EssenceFS, _EssenceDriveFS
 
 
 class RelicSgaCli(CliPluginGroup):
@@ -218,7 +216,7 @@ class RelicSgaInfoCli(CliPlugin):
                 return fs.getinfo(path, "essence").raw.get("essence", {})  # type: ignore
 
             _print(f"File: `{sga}`")
-            sgafs: EssenceFS
+            sgafs: SgaFsV2
             with fs.open_fs(f"sga://{sga}") as sgafs:  # type: ignore
                 _print("Archive Metadata:")
                 _stringify(sgafs.getmeta("essence"), indent=1)

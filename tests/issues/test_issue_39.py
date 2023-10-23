@@ -10,7 +10,7 @@ from fs.base import FS
 from fs.memoryfs import MemoryFS
 
 from relic.sga.core import StorageType
-from relic.sga.core.filesystem import EssenceFS
+from relic.sga.core.essencesfs import EssenceFS
 
 
 @contextmanager
@@ -45,7 +45,7 @@ _CHUNK_SIZE = 1024 * 1024 * 16  # 16 MiB
 
 def _pack_fake_osfs(osfs: FS, name: str) -> EssenceFS:
     # Create 'SGA' V2
-    sga = EssenceFS()
+    sga = SgaFsV2()
     sga.setmeta(
         {
             "name": name,  # Specify name of archive
