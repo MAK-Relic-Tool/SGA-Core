@@ -432,7 +432,7 @@ class _LazyEssenceNode(_EssenceNode):
         self._load()
         return super().list_dir()
 
-    def openbin(self, mode: Mode, lock: RLock, decompress:bool=True):
+    def openbin(self, mode: Mode, lock: RLock, decompress: bool = True):
         self._load()
         handle = self._decomp_handle if decompress else self._comp_handle
         return _EssenceFileHandle(handle, mode, lock, name=self.name)
@@ -479,7 +479,9 @@ class LazyEssenceFS(_EssenceFS):
         if not mode.reading and not mode.binary:
             raise NotImplementedError
         node: _LazyEssenceNode = self._get_node(path)
-        return node.openbin(mode, self._streamlock, decompress=options.get("decompress",True))
+        return node.openbin(
+            mode, self._streamlock, decompress=options.get("decompress", True)
+        )
 
     def verify(self, path: Optional[str] = None) -> bool:
         if path is None:
