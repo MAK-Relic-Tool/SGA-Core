@@ -123,7 +123,7 @@ class SgaTocHeader(LazyBinary):
 
 
 class SgaTocDrive(LazyBinary):
-    _PATH = None
+    _ALIAS = None
     _NAME = None
     _FIRST_FOLDER = None
     _LAST_FOLDER = None
@@ -131,24 +131,30 @@ class SgaTocDrive(LazyBinary):
     _LAST_FILE = None
     _ROOT_FOLDER = None
     _SIZE = None
+    _STR_ENC = "ascii"
+    _STR_PAD = "\0"
 
     def __init__(self, parent: BinaryIO, *args, **kwargs):
         super().__init__(
-            parent, *args, **kwargs, close_parent=False, name="SGA Toc Drive []"
+            parent,
+            *args,
+            **kwargs,
+            close_parent=False,
+            name="SGA Toc Drive ['Alias Not Loaded (Initing)']",
         )
-        self._name = f"SGA Toc Drive ['{self.path}']"
+        self._name = f"SGA Toc Drive ['{self.alias}']"
 
     @property
-    def path(self):
-        buffer = self._read_bytes(*self._PATH)
-        terminated_str = self._unpack_str(buffer, "ascii")
+    def alias(self):
+        buffer = self._read_bytes(*self._ALIAS)
+        terminated_str = self._unpack_str(buffer, self._STR_ENC, strip=self._STR_PAD)
         result = terminated_str.rstrip("\0")
         return result
 
     @property
     def name(self):
         buffer = self._read_bytes(*self._NAME)
-        terminated_str = self._unpack_str(buffer, "ascii")
+        terminated_str = self._unpack_str(buffer, self._STR_ENC, strip=self._STR_PAD)
         result = terminated_str.rstrip("\0")
         return result
 
@@ -287,12 +293,12 @@ class SgaTocInfoArea(Generic[T]):
         self._info_offset = offset
         self._info_count = count
 
-    def __getitem__(self, item: int) -> T:
+    def __get_window(self, index: int) -> T:
         offset, count = self._info_offset, self._info_count
-        if not (0 <= item < count):
+        if not (0 <= index < count):
             raise IndexError(item, f"Valid indexes are ['{0}', '{count}')")
 
-        if item not in self._windows:
+        if index not in self._windows:
             self._windows[item] = self._cls(
                 BinaryWindow(
                     self._parent,
@@ -302,7 +308,15 @@ class SgaTocInfoArea(Generic[T]):
                 )
             )
 
-        return self._windows[item]
+        return self._windows[index]
+
+    def __getitem__(self, item: Union[int, slice]) -> Union[T, List[T]]:
+        if isinstance(item, slice):
+            return list(
+                self.__get_window(index) for index in item.indices(self._info_count)
+            )
+        else:
+            return self.__get_window(item)
 
 
 class SgaTocFile:
