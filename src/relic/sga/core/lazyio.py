@@ -213,15 +213,44 @@ class LazyBinary(BinaryWrapper):
         else:
             return _read()
 
-    def _write_bytes(self, b: bytes, offset, size):
-        if len(b) > size:
-            raise NotImplementedError
+    def _write_bytes(self, b: bytes, offset: int, size: Optional[int] = None):
+        if size is not None and len(b) == size:
+            raise RelicToolError(
+                f"Trying to write '{size}' bytes, recieved '{b}' ({len(b)})!"
+            )
         self.seek(offset)
         return self.write(b)
 
     @classmethod
-    def _unpack_str(cls, b: bytes, encoding: str):
-        return b.decode(encoding)
+    def _unpack_str(cls, b: bytes, encoding: str, strip: Optional[str] = None):
+        value = b.decode(encoding)
+        if strip is not None:
+            value = value.strip(strip)
+        return value
+
+    @classmethod
+    def _pack_str(
+        cls,
+        v: str,
+        encoding: str,
+        size: Optional[int] = None,
+        padding: Optional[str] = None,
+    ):
+        buffer = v.encode(encoding)
+        if size is not None:
+            if len(buffer) < size and padding is not None and len(padding) > 0:
+                pad_buffer = padding.encode(encoding)
+                pad_count = len(buffer) / len(pad_buffer)
+                if pad_count != int(pad_count):
+                    raise RelicToolError(
+                        f"Trying to pad '{buffer}' ({len(buffer)}) to '{size}' bytes, but padding '{pad_buffer}' ({len(pad_buffer)}) is not a multiple of '{size-len(buffer)}' !"
+                    )
+                buffer = b"".join(buffer, pad_buffer * pad_count)
+            elif len(buffer) != size:
+                raise RelicToolError(
+                    f"Trying to write '{size}' bytes, recieved '{buffer}' ({len(buffer)})!"
+                )
+        return buffer
 
     @classmethod
     def _unpack_int(cls, b: bytes, byteorder="little", signed: bool = False) -> int:
