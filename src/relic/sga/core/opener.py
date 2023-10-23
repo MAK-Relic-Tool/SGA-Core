@@ -25,7 +25,6 @@ from relic.sga.core.definitions import _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencesfs import TKey, TValue, _EssenceFS as EssenceFS
 from relic.sga.core.lazyio import BinaryWrapper
-from fs.opener import registry as fs_registry
 
 
 class EntrypointRegistry(Generic[TKey, TValue]):

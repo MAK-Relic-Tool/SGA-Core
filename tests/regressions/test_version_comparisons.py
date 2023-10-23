@@ -7,8 +7,10 @@ from relic.sga.core.definitions import Version
 # Chunky versions start at 1
 # Max i've seen is probably 16ish?
 # Minor has a lot mor variety than Chunky; so we test a bit more
-_VERSION_MAJORS = [1, 2, 4, 8, 16]  # arbitrary
-_VERSION_MINORS = [0, 1, 2, 3]  # arbitrary
+_VERSION_MAJORS = range(1, 11)  # So far we only go up to V10
+_VERSION_MINORS = [0, 1]  # Allegedly CoHO was v4.1 so... we do 0,1
+
+
 _VERSION_ARGS = list(itertools.product(_VERSION_MAJORS, _VERSION_MINORS))
 _VERSIONS = [Version(*a) for a in _VERSION_ARGS]
 _VERSION_IDS = [f"V{v.major}.{v.minor}" for v in _VERSIONS]
