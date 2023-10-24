@@ -6,14 +6,16 @@ from typing import BinaryIO, ClassVar, Tuple, Generic, Type, Optional
 from relic.sga.core import Version
 from relic.sga.core.lazyio import LazyBinary, BinaryWindow, tell_end, T
 
+def _safe_get_parent_name(parent:BinaryIO, default:Optional[str]=None):
+    return default if not hasattr(parent,"name") else parent.name
 
 class ArchivePtrs(typing.Protocol):
     @property
-    def header_pos(self) -> int:
+    def toc_pos(self) -> int:
         raise NotImplementedError
 
     @property
-    def header_size(self) -> int:
+    def toc_size(self) -> int:
         raise NotImplementedError
 
     @property
@@ -25,7 +27,7 @@ class ArchivePtrs(typing.Protocol):
         raise NotImplementedError
 
 
-class SgaMetaBlock(LazyBinary, ArchivePtrs):
+class SgaHeader(LazyBinary, ArchivePtrs):
     def __init__(self, parent: BinaryIO, *args, **kwargs):
         super().__init__(parent, *args, **kwargs, name="SGA Meta Block")
 
@@ -34,11 +36,11 @@ class SgaMetaBlock(LazyBinary, ArchivePtrs):
         raise NotImplementedError
 
     @property
-    def header_pos(self) -> int:
+    def toc_pos(self) -> int:
         raise NotImplementedError
 
     @property
-    def header_size(self) -> int:
+    def toc_size(self) -> int:
         raise NotImplementedError
 
     @property
@@ -48,6 +50,7 @@ class SgaMetaBlock(LazyBinary, ArchivePtrs):
     @property
     def data_size(self) -> int:
         raise NotImplementedError
+
 
 
 class SgaTocHeader(LazyBinary):
@@ -60,66 +63,68 @@ class SgaTocHeader(LazyBinary):
     _NAME_POS: ClassVar[Tuple[int, int]] = None
     _NAME_COUNT: ClassVar[Tuple[int, int]] = None
 
+    class TablePointer:
+        def __init__(self, container:LazyBinary, pos:Tuple[int,int], count:Tuple[int,int]):
+            self._POS = pos
+            self._COUNT = count
+            self._container = container
+
+        @property
+        def offset(self):
+            buffer = self._container._read_bytes(*self._POS)
+            return self._container._unpack_int(buffer)
+
+        @offset.setter
+        def offset(self, value: int):
+            buffer = self._container._pack_int(value, self._POS[1])
+            self._container._write_bytes(buffer, *self._POS)
+
+        @property
+        def count(self):
+            buffer = self._container._read_bytes(*self._COUNT)
+            return self._container._unpack_int(buffer)
+
+        @count.setter
+        def count(self, value: int):
+            buffer = self._container._pack_int(value, self._COUNT[1])
+            self._container._write_bytes(buffer, *self._COUNT)
+
+        @property
+        def info(self) -> Tuple[int, int]:
+            return self.offset, self.count
+
+        @info.setter
+        def info(self, value: Tuple[int, int]):
+            pos, count = value
+            self.offset = pos
+            self.count = count
+
     def __init__(self, parent: BinaryIO, *args, **kwargs):
         super().__init__(
             parent, *args, **kwargs, close_parent=False, name="SGA ToC Header"
         )
+        self._drive = self.TablePointer(self,self._DRIVE_POS,self._DRIVE_COUNT)
+        self._folder = self.TablePointer(self,self._FOLDER_POS,self._FOLDER_COUNT)
+        self._file = self.TablePointer(self,self._FILE_POS,self._FILE_COUNT)
+        self._name = self.TablePointer(self,self._NAME_POS,self._NAME_COUNT)
+
+    # DRIVE
+    @property
+    def drive(self) -> TocPtrs:
+        return self._drive
 
     @property
-    def drive_pos(self):
-        buffer = self._read_bytes(*self._DRIVE_POS)
-        return self._unpack_int(buffer)
+    def folder(self) -> TocPtrs:
+        return self._folder
 
     @property
-    def drive_count(self):
-        buffer = self._read_bytes(*self._DRIVE_COUNT)
-        return self._unpack_int(buffer)
+    def file(self) -> TocPtrs:
+        return self._file
 
     @property
-    def drive_info(self) -> Tuple[int, int]:
-        return self.drive_pos, self.drive_count
+    def name(self) -> TocPtrs:
+        return self._name
 
-    @property
-    def folder_pos(self):
-        buffer = self._read_bytes(*self._FOLDER_POS)
-        return self._unpack_int(buffer)
-
-    @property
-    def folder_count(self):
-        buffer = self._read_bytes(*self._FOLDER_COUNT)
-        return self._unpack_int(buffer)
-
-    @property
-    def folder_info(self) -> Tuple[int, int]:
-        return self.folder_pos, self.folder_count
-
-    @property
-    def file_pos(self):
-        buffer = self._read_bytes(*self._FILE_POS)
-        return self._unpack_int(buffer)
-
-    @property
-    def file_count(self):
-        buffer = self._read_bytes(*self._FILE_COUNT)
-        return self._unpack_int(buffer)
-
-    @property
-    def file_info(self) -> Tuple[int, int]:
-        return self.file_pos, self.file_count
-
-    @property
-    def name_pos(self):
-        buffer = self._read_bytes(*self._NAME_POS)
-        return self._unpack_int(buffer)
-
-    @property
-    def name_count(self):
-        buffer = self._read_bytes(*self._NAME_COUNT)
-        return self._unpack_int(buffer)
-
-    @property
-    def name_info(self) -> Tuple[int, int]:
-        return self.name_pos, self.name_count
 
 
 class SgaTocDrive(LazyBinary):
@@ -151,6 +156,11 @@ class SgaTocDrive(LazyBinary):
         result = terminated_str.rstrip("\0")
         return result
 
+    @alias.setter
+    def alias(self, value:str):
+        buffer = self._pack_str(value, self._STR_ENC, size=self._ALIAS[1], padding=self._STR_PAD)
+        self._write_bytes(buffer,*self._ALIAS)
+
     @property
     def name(self):
         buffer = self._read_bytes(*self._NAME)
@@ -158,30 +168,60 @@ class SgaTocDrive(LazyBinary):
         result = terminated_str.rstrip("\0")
         return result
 
+    @name.setter
+    def name(self, value:str):
+        buffer = self._pack_str(value, self._STR_ENC, size=self._NAME[1], padding=self._STR_PAD)
+        self._write_bytes(buffer,*self._NAME)
+
     @property
     def first_folder(self):
         buffer = self._read_bytes(*self._FIRST_FOLDER)
         return self._unpack_int(buffer)
+
+    @first_folder.setter
+    def first_folder(self, value:int):
+        buffer = self._pack_int(value,self._FIRST_FOLDER[1])
+        self._write_bytes(buffer,*self._FIRST_FOLDER)
 
     @property
     def last_folder(self):
         buffer = self._read_bytes(*self._LAST_FOLDER)
         return self._unpack_int(buffer)
 
+    @last_folder.setter
+    def last_folder(self, value:int):
+        buffer = self._pack_int(value,self._LAST_FOLDER[1])
+        self._write_bytes(buffer,*self._LAST_FOLDER)
+
     @property
     def first_file(self):
         buffer = self._read_bytes(*self._FIRST_FILE)
         return self._unpack_int(buffer)
+
+    @first_file.setter
+    def first_file(self, value:int):
+        buffer = self._pack_int(value,self._FIRST_FILE[1])
+        self._write_bytes(buffer,*self._FIRST_FILE)
 
     @property
     def last_file(self):
         buffer = self._read_bytes(*self._LAST_FILE)
         return self._unpack_int(buffer)
 
+    @last_file.setter
+    def last_file(self, value:int):
+        buffer = self._pack_int(value,self._LAST_FILE[1])
+        self._write_bytes(buffer,*self._LAST_FILE)
+
     @property
     def root_folder(self):
         buffer = self._read_bytes(*self._ROOT_FOLDER)
         return self._unpack_int(buffer)
+
+    @root_folder.setter
+    def root_folder(self, value:int):
+        buffer = self._pack_int(value,self._ROOT_FOLDER[1])
+        self._write_bytes(buffer,*self._ROOT_FOLDER)
 
 
 class SgaTocFolder(LazyBinary):
@@ -204,25 +244,50 @@ class SgaTocFolder(LazyBinary):
         result = self._unpack_int(buffer)
         return result
 
+    @name_offset.setter
+    def name_offset(self, value):
+        buffer = self._pack_int(value,self._NAME_OFFSET[1])
+        self._write_bytes(buffer,*self._NAME_OFFSET)
+
     @property
     def first_folder(self):
         buffer = self._read_bytes(*self._SUB_FOLDER_START)
         return self._unpack_int(buffer)
+
+    @first_folder.setter
+    def first_folder(self, value):
+        buffer = self._pack_int(value, self._SUB_FOLDER_START[1])
+        self._write_bytes(buffer, * self._SUB_FOLDER_START)
 
     @property
     def last_folder(self):
         buffer = self._read_bytes(*self._SUB_FOLDER_STOP)
         return self._unpack_int(buffer)
 
+    @last_folder.setter
+    def last_folder(self, value):
+        buffer = self._pack_int(value, self._SUB_FOLDER_STOP[1])
+        self._write_bytes(buffer, * self._SUB_FOLDER_STOP)
+
     @property
     def first_file(self):
         buffer = self._read_bytes(*self._FIRST_FILE)
         return self._unpack_int(buffer)
 
+    @first_file.setter
+    def first_file(self, value):
+        buffer = self._pack_int(value, self._FIRST_FILE[1])
+        self._write_bytes(buffer, * self._FIRST_FILE)
+
     @property
     def last_file(self):
         buffer = self._read_bytes(*self._LAST_FILE)
         return self._unpack_int(buffer)
+
+    @last_file.setter
+    def last_file(self, value):
+        buffer = self._pack_int(value, self._LAST_FILE[1])
+        self._write_bytes(buffer, *self._LAST_FILE)
 
 
 class SgaNameWindow(BinaryWindow):
@@ -372,7 +437,7 @@ class SgaFile(LazyBinary):
     _MAGIC_VERSION_SIZE = 12
 
     def __init__(self, parent: BinaryIO):
-        super().__init__(parent, close_parent=False, name=f"SGA File ['{parent.name}']")
+        super().__init__(parent, close_parent=False, name=f"SGA File ['{_safe_get_parent_name(parent)}']")
 
     @property
     def magic_word(self) -> bytes:

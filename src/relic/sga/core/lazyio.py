@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 import os
+import math
 import zlib
 from contextlib import contextmanager
 from types import TracebackType
@@ -15,7 +15,8 @@ from typing import (
     Optional,
     TypeVar,
 )
-
+from io import BytesIO
+from relic.core.errors import RelicToolError
 _DEBUG_CLOSE = True
 
 
@@ -24,6 +25,7 @@ class BinaryWrapper(BinaryIO):
         self, parent: BinaryIO, close_parent: bool = True, name: Optional[str] = None
     ):
         self._parent = parent
+        self._parent_is_bytesio = isinstance(parent,BytesIO)
         self._close_parent = close_parent
         self._closed = False
         self._name = name
@@ -33,7 +35,7 @@ class BinaryWrapper(BinaryIO):
 
     @property
     def name(self) -> str:
-        return self._name or self._parent.name
+        return self._name or (None if self._parent_is_bytesio else self._parent.name)
 
     def close(self) -> None:
         if self._close_parent:
@@ -103,7 +105,7 @@ class BinaryWrapper(BinaryIO):
 
     @property
     def mode(self) -> str:
-        return self._parent.mode
+        return self._parent.mode if not self._parent_is_bytesio else "r+b"
 
 
 class BinaryWindow(BinaryWrapper):
@@ -119,7 +121,7 @@ class BinaryWindow(BinaryWrapper):
         self._now = 0
         self._start = start
         self._size = size
-
+        
     @property
     def _end(self) -> int:
         return self._start + self._size
@@ -156,19 +158,18 @@ class BinaryWindow(BinaryWrapper):
             raise NotImplementedError(
                 0, new_now, self._size, "~", __offset, __WHENCE_STR
             )  # TODO
-        super().seek(self._start + new_now)
+        self._parent.seek(self._start + new_now, os.SEEK_SET)
         self._now = new_now
         return self._now
 
     def read(self, __n: int = -1) -> AnyStr:
-        remaining = self._remaining
-
-        if __n == -1:  # Read All
-            __n = remaining
-        elif __n > remaining:  # Clamp
-            __n = remaining
-
         with self.__rw_ctx():
+            remaining = self._remaining
+
+            if __n == -1:  # Read All
+                __n = remaining
+            elif __n > remaining:  # Clamp
+                __n = remaining
             return super().read(__n)
 
     def readline(self, __limit: int = ...) -> AnyStr:
@@ -178,7 +179,11 @@ class BinaryWindow(BinaryWrapper):
         raise NotImplementedError
 
     def write(self, __s: AnyStr) -> int:
-        raise NotImplementedError  # TODO
+        with self.__rw_ctx():
+            remaining = self._remaining
+            if len(__s) > remaining:
+                raise RelicToolError(f"Trying to write '{len(__s)}' bytes into a window with only '{remaining}' bytes remaining!")
+            return super().write(__s)
 
     def writelines(self, __lines: Iterable[AnyStr]) -> None:
         raise NotImplementedError  # TODO
@@ -193,7 +198,7 @@ class LazyBinary(BinaryWrapper):
         name: Optional[str] = None,
     ):
         super().__init__(parent, close_parent=close_parent, name=name)
-        if cacheable is None:
+        if cacheable is None and hasattr(parent,"mode"): # BytesIO has no 'mode' attribute
             cacheable = "r" in parent.mode
 
         cache = {} if cacheable else None
@@ -215,7 +220,7 @@ class LazyBinary(BinaryWrapper):
             return _read()
 
     def _write_bytes(self, b: bytes, offset: int, size: Optional[int] = None):
-        if size is not None and len(b) == size:
+        if size is not None and len(b) != size:
             raise RelicToolError(
                 f"Trying to write '{size}' bytes, recieved '{b}' ({len(b)})!"
             )
@@ -241,12 +246,12 @@ class LazyBinary(BinaryWrapper):
         if size is not None:
             if len(buffer) < size and padding is not None and len(padding) > 0:
                 pad_buffer = padding.encode(encoding)
-                pad_count = len(buffer) / len(pad_buffer)
+                pad_count = (size - len(buffer)) / len(pad_buffer)
                 if pad_count != int(pad_count):
                     raise RelicToolError(
                         f"Trying to pad '{buffer}' ({len(buffer)}) to '{size}' bytes, but padding '{pad_buffer}' ({len(pad_buffer)}) is not a multiple of '{size-len(buffer)}' !"
                     )
-                buffer = b"".join(buffer, pad_buffer * pad_count)
+                buffer = b"".join([buffer, pad_buffer * int(pad_count)])
             elif len(buffer) != size:
                 raise RelicToolError(
                     f"Trying to write '{size}' bytes, recieved '{buffer}' ({len(buffer)})!"
@@ -258,7 +263,7 @@ class LazyBinary(BinaryWrapper):
         return int.from_bytes(b, byteorder, signed=signed)
 
     @classmethod
-    def __pack_int(
+    def _pack_int(
         cls, v: int, length: int, byteorder="little", signed: bool = False
     ) -> bytes:
         return v.to_bytes(length, byteorder, signed=signed)
@@ -269,7 +274,7 @@ class LazyBinary(BinaryWrapper):
 
     @classmethod
     def _pack_uint16(cls, v: int, byteorder="little"):
-        return cls.__pack_int(v, 2, byteorder, False)
+        return cls._pack_int(v, 2, byteorder, False)
 
 
 T = TypeVar("T")
@@ -420,23 +425,55 @@ def tell_end(stream: BinaryIO):
 
 
 def read_chunks(
-    stream: BinaryIO,
+    stream: Union[BinaryIO,bytes],
     start: Optional[int] = None,
     size: Optional[int] = None,
     chunk_size: int = _KiB * 16,
 ):
-    if start is not None:
-        stream.seek(start)
-    if size is None:
-        while True:
-            buffer = stream.read(chunk_size)
-            if len(buffer) == 0:
-                return
-            yield buffer
+    if isinstance(stream,bytes):
+        if start is None:
+            start = 0
+        if size is None:
+            size = len(stream) - start
+        for index in range(math.ceil(size / chunk_size)):
+            read_start = start + index * chunk_size
+            read_end = start + min((index + 1) * chunk_size, size)
+            yield stream[read_start:read_end]
     else:
-        while size > 0:
-            buffer = stream.read(min(size, chunk_size))
-            size -= len(buffer)
-            if len(buffer) == 0:
-                return
-            yield buffer
+        if start is not None:
+            stream.seek(start)
+        if size is None:
+            while True:
+                buffer = stream.read(chunk_size)
+                if len(buffer) == 0:
+                    return
+                yield buffer
+        else:
+            while size > 0:
+                buffer = stream.read(min(size, chunk_size))
+                size -= len(buffer)
+                if len(buffer) == 0:
+                    return
+                yield buffer
+
+def chunk_copy(
+    input: Union[BinaryIO,bytes],
+    output: Union[BinaryIO,bytes],
+    input_start: Optional[int] = None,
+    size: Optional[int] = None,
+    output_start: Optional[int] = None,
+    chunk_size: int = _KiB * 16):
+
+    if isinstance(output,bytes):
+        if output_start is None:
+            output_start = 0
+
+        for i, chunk in enumerate(read_chunks(input,input_start,size,chunk_size)):
+            chunk_offset = i*chunk_size
+            chunk_size = len(chunk)
+            output[start+chunk_offset:start+chunk_offset+chunk_size] = chunk
+    else:
+        if output_start is not None:
+            output.seek(output_start)
+        for chunk in read_chunks(input,input_start,size,chunk_size):
+            output.write(chunk)
