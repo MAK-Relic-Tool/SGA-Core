@@ -106,10 +106,10 @@ class StorageType(int, Enum):
     """
     Specifies whether data is stored as a 'raw blob' or as a 'zlib compressed blob'
     """
-
+    # According to modpackager
     STORE = 0
-    BUFFER_COMPRESS = 1
-    STREAM_COMPRESS = 2
+    STREAM_COMPRESS = 1
+    BUFFER_COMPRESS = 2
 
 
 class VerificationType(int, Enum):
