@@ -19,12 +19,12 @@ import pkg_resources
 from fs.base import FS
 from fs.opener import Opener
 from fs.opener.parse import ParseResult
+from relic.core.lazyio import BinaryWrapper
 
 from relic.sga.core import Version, MagicWord
 from relic.sga.core.definitions import _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencesfs import _EssenceFS as EssenceFS
-from relic.sga.core.lazyio import BinaryWrapper
 
 TKey = TypeVar("TKey")
 TValue = TypeVar("TValue")

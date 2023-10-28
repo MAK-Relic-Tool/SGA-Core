@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import BinaryIO, ClassVar, Tuple, Generic, Type, Optional, List, Protocol, Union, Iterable
 
-from relic.sga.core import Version
-from relic.sga.core.lazyio import LazyBinary, BinaryWindow, tell_end, T
+from relic.core.lazyio import BinaryWindow, tell_end, T, BinaryProxySerializer, BinaryProxy
+
+from relic.sga.core import Version, StorageType
+
 
 def _safe_get_parent_name(parent:BinaryIO, default:Optional[str]=None):
     return default if not hasattr(parent,"name") else parent.name
@@ -26,9 +28,9 @@ class ArchivePtrs(Protocol):
         raise NotImplementedError
 
 
-class SgaHeader(LazyBinary, ArchivePtrs):
-    def __init__(self, parent: BinaryIO, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs, name="SGA Meta Block")
+class SgaHeader(BinaryProxySerializer, ArchivePtrs):
+    def __init__(self, parent: BinaryIO):
+        super().__init__(parent)
 
     @property
     def name(self) -> str:
@@ -52,7 +54,7 @@ class SgaHeader(LazyBinary, ArchivePtrs):
 
 
 
-class SgaTocHeader(LazyBinary):
+class SgaTocHeader(BinaryProxySerializer):
     _DRIVE_POS: ClassVar[Tuple[int, int]] = None
     _DRIVE_COUNT: ClassVar[Tuple[int, int]] = None
     _FOLDER_POS: ClassVar[Tuple[int, int]] = None
@@ -63,30 +65,27 @@ class SgaTocHeader(LazyBinary):
     _NAME_COUNT: ClassVar[Tuple[int, int]] = None
 
     class TablePointer:
-        def __init__(self, container:LazyBinary, pos:Tuple[int,int], count:Tuple[int,int]):
+        def __init__(self, parent:SgaTocHeader, pos:Tuple[int,int], count:Tuple[int,int]):
             self._POS = pos
             self._COUNT = count
-            self._container = container
+            self._serializer = parent._serializer
 
         @property
         def offset(self):
-            buffer = self._container._read_bytes(*self._POS)
-            return self._container._unpack_int(buffer)
+            return self._serializer.int.read(*self._POS)
 
         @offset.setter
         def offset(self, value: int):
-            buffer = self._container._pack_int(value, self._POS[1])
-            self._container._write_bytes(buffer, *self._POS)
+            self._serializer.int.write(value,*self._POS)
 
         @property
         def count(self):
-            buffer = self._container._read_bytes(*self._COUNT)
-            return self._container._unpack_int(buffer)
+            return self._serializer.int.read(*self._COUNT)
 
         @count.setter
         def count(self, value: int):
-            buffer = self._container._pack_int(value, self._COUNT[1])
-            self._container._write_bytes(buffer, *self._COUNT)
+            self._serializer.int.write(value,*self._COUNT)
+
 
         @property
         def info(self) -> Tuple[int, int]:
@@ -98,9 +97,9 @@ class SgaTocHeader(LazyBinary):
             self.offset = pos
             self.count = count
 
-    def __init__(self, parent: BinaryIO, *args, **kwargs):
+    def __init__(self, parent: BinaryIO):
         super().__init__(
-            parent, *args, **kwargs, close_parent=False, name="SGA ToC Header"
+            parent,
         )
         self._drive = self.TablePointer(self,self._DRIVE_POS,self._DRIVE_COUNT)
         self._folder = self.TablePointer(self,self._FOLDER_POS,self._FOLDER_COUNT)
@@ -126,7 +125,7 @@ class SgaTocHeader(LazyBinary):
 
 
 
-class SgaTocDrive(LazyBinary):
+class SgaTocDrive(BinaryProxySerializer):
     _ALIAS = None
     _NAME = None
     _FIRST_FOLDER = None
@@ -135,161 +134,130 @@ class SgaTocDrive(LazyBinary):
     _LAST_FILE = None
     _ROOT_FOLDER = None
     _SIZE = None
+    _INT_FORMAT = {"byteorder":"little","signed":False}
     _STR_ENC = "ascii"
     _STR_PAD = "\0"
 
-    def __init__(self, parent: BinaryIO, *args, **kwargs):
+    def __init__(self, parent: BinaryIO):
         super().__init__(
             parent,
-            *args,
-            **kwargs,
-            close_parent=False,
-            name="SGA Toc Drive ['Alias Not Loaded (Initing)']",
         )
-        self._name = f"SGA Toc Drive ['{self.alias}']"
 
     @property
     def alias(self):
-        buffer = self._read_bytes(*self._ALIAS)
-        terminated_str = self._unpack_str(buffer, self._STR_ENC, strip=self._STR_PAD)
-        result = terminated_str.rstrip("\0")
-        return result
+        return self._serializer.c_string.read(*self._ALIAS,encoding=self._STR_ENC,padding=self._STR_PAD)
 
     @alias.setter
     def alias(self, value:str):
-        buffer = self._pack_str(value, self._STR_ENC, size=self._ALIAS[1], padding=self._STR_PAD)
-        self._write_bytes(buffer,*self._ALIAS)
+        self._serializer.c_string.write(value, *self._ALIAS,encoding=self._STR_ENC,padding=self._STR_PAD)
 
     @property
     def name(self):
-        buffer = self._read_bytes(*self._NAME)
-        terminated_str = self._unpack_str(buffer, self._STR_ENC, strip=self._STR_PAD)
-        result = terminated_str.rstrip("\0")
-        return result
+        return self._serializer.c_string.read(*self._NAME,encoding=self._STR_ENC,padding=self._STR_PAD)
 
     @name.setter
     def name(self, value:str):
-        buffer = self._pack_str(value, self._STR_ENC, size=self._NAME[1], padding=self._STR_PAD)
-        self._write_bytes(buffer,*self._NAME)
+        self._serializer.c_string.write(value, *self._NAME,encoding=self._STR_ENC,padding=self._STR_PAD)
 
     @property
     def first_folder(self):
-        buffer = self._read_bytes(*self._FIRST_FOLDER)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._FIRST_FOLDER, **self._INT_FORMAT)
 
     @first_folder.setter
     def first_folder(self, value:int):
-        buffer = self._pack_int(value,self._FIRST_FOLDER[1])
-        self._write_bytes(buffer,*self._FIRST_FOLDER)
+        self._serializer.int.write(value,*self._FIRST_FOLDER, **self._INT_FORMAT)
 
     @property
     def last_folder(self):
-        buffer = self._read_bytes(*self._LAST_FOLDER)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._LAST_FOLDER, **self._INT_FORMAT)
 
     @last_folder.setter
     def last_folder(self, value:int):
-        buffer = self._pack_int(value,self._LAST_FOLDER[1])
-        self._write_bytes(buffer,*self._LAST_FOLDER)
+        self._serializer.int.write(value, *self._LAST_FOLDER, **self._INT_FORMAT)
 
     @property
     def first_file(self):
-        buffer = self._read_bytes(*self._FIRST_FILE)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._FIRST_FILE, **self._INT_FORMAT)
 
     @first_file.setter
-    def first_file(self, value:int):
-        buffer = self._pack_int(value,self._FIRST_FILE[1])
-        self._write_bytes(buffer,*self._FIRST_FILE)
+    def first_file(self, value: int):
+        self._serializer.int.write(value, *self._FIRST_FILE, **self._INT_FORMAT)
+
 
     @property
     def last_file(self):
-        buffer = self._read_bytes(*self._LAST_FILE)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._LAST_FILE, **self._INT_FORMAT)
+
 
     @last_file.setter
-    def last_file(self, value:int):
-        buffer = self._pack_int(value,self._LAST_FILE[1])
-        self._write_bytes(buffer,*self._LAST_FILE)
+    def last_file(self, value: int):
+        self._serializer.int.write(value, *self._LAST_FILE, **self._INT_FORMAT)
 
     @property
     def root_folder(self):
-        buffer = self._read_bytes(*self._ROOT_FOLDER)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._ROOT_FOLDER, **self._INT_FORMAT)
 
     @root_folder.setter
     def root_folder(self, value:int):
-        buffer = self._pack_int(value,self._ROOT_FOLDER[1])
-        self._write_bytes(buffer,*self._ROOT_FOLDER)
+        self._serializer.int.write(value, *self._ROOT_FOLDER, **self._INT_FORMAT)
 
 
-class SgaTocFolder(LazyBinary):
+class SgaTocFolder(BinaryProxySerializer):
     _NAME_OFFSET = None
     _SUB_FOLDER_START = None
     _SUB_FOLDER_STOP = None
     _FIRST_FILE = None
     _LAST_FILE = None
     _SIZE = None
+    _INT_FORMAT = {"byteorder":"little","signed":False}
 
-    def __init__(self, parent: BinaryIO, *args, **kwargs):
+    def __init__(self, parent: BinaryIO):
         super().__init__(
-            parent, *args, **kwargs, close_parent=False, name="SGA Toc Folder []"
+            parent
         )
-        self._name = f"SGA Toc Folder ['{self.name}']"
 
     @property
     def name_offset(self):
-        buffer = self._read_bytes(*self._NAME_OFFSET)
-        result = self._unpack_int(buffer)
-        return result
+        return self._serializer.int.read(*self._NAME_OFFSET,**self._INT_FORMAT)
 
     @name_offset.setter
     def name_offset(self, value):
-        buffer = self._pack_int(value,self._NAME_OFFSET[1])
-        self._write_bytes(buffer,*self._NAME_OFFSET)
+        self._serializer.int.write(value,*self._NAME_OFFSET, **self._INT_FORMAT)
 
     @property
     def first_folder(self):
-        buffer = self._read_bytes(*self._SUB_FOLDER_START)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._SUB_FOLDER_START,**self._INT_FORMAT)
 
     @first_folder.setter
     def first_folder(self, value):
-        buffer = self._pack_int(value, self._SUB_FOLDER_START[1])
-        self._write_bytes(buffer, * self._SUB_FOLDER_START)
+        self._serializer.int.write(value,*self._SUB_FOLDER_START, **self._INT_FORMAT)
 
     @property
     def last_folder(self):
-        buffer = self._read_bytes(*self._SUB_FOLDER_STOP)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._SUB_FOLDER_STOP,**self._INT_FORMAT)
 
     @last_folder.setter
     def last_folder(self, value):
-        buffer = self._pack_int(value, self._SUB_FOLDER_STOP[1])
-        self._write_bytes(buffer, * self._SUB_FOLDER_STOP)
+        self._serializer.int.write(value,*self._SUB_FOLDER_STOP, **self._INT_FORMAT)
 
     @property
     def first_file(self):
-        buffer = self._read_bytes(*self._FIRST_FILE)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._FIRST_FILE,**self._INT_FORMAT)
 
     @first_file.setter
     def first_file(self, value):
-        buffer = self._pack_int(value, self._FIRST_FILE[1])
-        self._write_bytes(buffer, * self._FIRST_FILE)
+        self._serializer.int.write(value,*self._FIRST_FILE, **self._INT_FORMAT)
 
     @property
     def last_file(self):
-        buffer = self._read_bytes(*self._LAST_FILE)
-        return self._unpack_int(buffer)
+        return self._serializer.int.read(*self._LAST_FILE,**self._INT_FORMAT)
 
     @last_file.setter
     def last_file(self, value):
-        buffer = self._pack_int(value, self._LAST_FILE[1])
-        self._write_bytes(buffer, *self._LAST_FILE)
+        self._serializer.int.write(value,*self._LAST_FILE, **self._INT_FORMAT)
 
 
-class SgaNameWindow(BinaryWindow):
+class SgaNameWindow(BinaryProxySerializer):
     def __init__(
         self,
         parent: BinaryIO,
@@ -298,11 +266,14 @@ class SgaNameWindow(BinaryWindow):
         length_mode: bool = False,
         encoding: str = "utf-8",
     ):
-        self._encoding = encoding
-        self._cacheable = not parent.writable()
-        self.length_mode = length_mode
         size = count if length_mode else tell_end(parent)
-        super().__init__(parent, offset, size, name="SGA ToC Name Buffer")
+        self._window = BinaryWindow(parent, offset, size, name="SGA ToC Name Buffer")
+        super().__init__(self._window)
+
+        self._encoding = encoding
+        self._cacheable = parent.readable() and not parent.writable()
+        self.length_mode = length_mode
+
         self._cache = None
         self._init_cache()
 
@@ -314,8 +285,8 @@ class SgaNameWindow(BinaryWindow):
 
         # Length mode can preload the cache
         if self.length_mode:
-            self.seek(0)
-            buffer = self.read()
+            self._serializer.stream.seek(0)
+            buffer = self._serializer.stream.read()
             names:List[bytes] = buffer.split(b"\0")
             counter = 0
             for name in names:
@@ -340,7 +311,7 @@ class SgaNameWindow(BinaryWindow):
         if self._cache is not None and name_offset in self._cache:
             return self._cache[name_offset]
 
-        name_buffer = self._read_until_terminal(self, name_offset)
+        name_buffer = self._read_until_terminal(self._serializer.stream, name_offset)
         name = name_buffer.decode(self._encoding)
 
         if self._cache is not None:
@@ -350,7 +321,7 @@ class SgaNameWindow(BinaryWindow):
 
 
 class SgaTocInfoArea(Generic[T]):
-    def __init__(self, parent: BinaryIO, offset: int, count: int, cls: Type[T]):
+    def __init__(self, parent: Union[BinaryIO,BinaryProxy], offset: int, count: int, cls: Type[T]):
         self._parent = parent
         self._cls = cls
         self._windows = {}
@@ -392,29 +363,29 @@ class SgaTocInfoArea(Generic[T]):
 
 class SgaTocFile:
     @property
-    def name_offset(self):
+    def name_offset(self) -> int:
         raise NotImplementedError
 
     @property
-    def data_offset(self):
+    def data_offset(self) -> int:
         raise NotImplementedError
 
     @property
-    def compressed_size(self):  # length_in_archive
+    def compressed_size(self) -> int:  # length_in_archive
         raise NotImplementedError
 
     @property
-    def decompressed_size(self):  # length_on_disk
+    def decompressed_size(self) -> int:  # length_on_disk
         raise NotImplementedError
 
     @property
-    def storage_type(self):
+    def storage_type(self) -> StorageType:
         raise NotImplementedError
 
 
-class SgaToc(LazyBinary):
+class SgaToc(BinaryProxySerializer):
     def __init__(self, parent: BinaryIO):
-        super().__init__(parent, name="SGA ToC")
+        super().__init__(parent)
 
     @property
     def header(self) -> SgaTocHeader:
@@ -437,31 +408,32 @@ class SgaToc(LazyBinary):
         raise NotImplementedError
 
 
-class SgaFile(LazyBinary):
+class SgaFile(BinaryProxySerializer):
     _MAGIC_WORD = (0, 8)
     _VERSION = (8, 4)
     _MAGIC_VERSION_SIZE = 12
+    _VERSION_INT_FMT = {"byteorder":"little","signed":False}
 
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent, close_parent=False, name=f"SGA File ['{_safe_get_parent_name(parent)}']")
+    def __init__(self, parent: Union[BinaryIO,BinaryProxy]):
+        super().__init__(parent)
 
     @property
     def magic_word(self) -> bytes:
-        return self._read_bytes(*self._MAGIC_WORD)
+        return self._serializer.read_bytes(*self._MAGIC_WORD)
 
     @property
     def version(self) -> Version:
-        buffer = self._read_bytes(*self._VERSION)
-        major = self._unpack_uint16(buffer[:2])
-        minor = self._unpack_uint16(buffer[2:])
+        buffer = self._serializer.read_bytes(*self._VERSION)
+        major = self._serializer.uint16.unpack(buffer[:2],**self._VERSION_INT_FMT)
+        minor = self._serializer.uint16.unpack(buffer[2:],**self._VERSION_INT_FMT)
         return Version(major, minor)
 
     @version.setter
     def version(self, value: Version):
-        major = self._pack_uint16(value.major)
-        minor = self._pack_uint16(value.minor)
+        major = self._serializer.uint16.pack(value.major, **self._VERSION_INT_FMT)
+        minor = self._serializer.uint16.pack(value.minor, **self._VERSION_INT_FMT)
         buffer = b"".join([major, minor])
-        self._write_bytes(buffer, *self._VERSION)
+        self._serializer.write_bytes(buffer,*self._VERSION)
 
     @property
     def meta(self) -> SgaHeader:

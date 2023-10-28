@@ -3,8 +3,7 @@ import zlib
 from typing import BinaryIO, Optional, Callable, Generic, TypeVar, Type, Union
 
 from relic.core.errors import MismatchError
-
-from relic.sga.core.lazyio import read_chunks
+from relic.core.lazyio import read_chunks
 
 T = TypeVar("T")
 
