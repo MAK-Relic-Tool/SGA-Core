@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import typing
-from typing import BinaryIO, ClassVar, Tuple, Generic, Type, Optional
+from typing import BinaryIO, ClassVar, Tuple, Generic, Type, Optional, List, Protocol, Union, Iterable
 
 from relic.sga.core import Version
 from relic.sga.core.lazyio import LazyBinary, BinaryWindow, tell_end, T
@@ -9,7 +8,7 @@ from relic.sga.core.lazyio import LazyBinary, BinaryWindow, tell_end, T
 def _safe_get_parent_name(parent:BinaryIO, default:Optional[str]=None):
     return default if not hasattr(parent,"name") else parent.name
 
-class ArchivePtrs(typing.Protocol):
+class ArchivePtrs(Protocol):
     @property
     def toc_pos(self) -> int:
         raise NotImplementedError
@@ -110,19 +109,19 @@ class SgaTocHeader(LazyBinary):
 
     # DRIVE
     @property
-    def drive(self) -> TocPtrs:
+    def drive(self) -> TablePointer:
         return self._drive
 
     @property
-    def folder(self) -> TocPtrs:
+    def folder(self) -> TablePointer:
         return self._folder
 
     @property
-    def file(self) -> TocPtrs:
+    def file(self) -> TablePointer:
         return self._file
 
     @property
-    def name(self) -> TocPtrs:
+    def name(self) -> TablePointer:
         return self._name
 
 
@@ -300,7 +299,7 @@ class SgaNameWindow(BinaryWindow):
         encoding: str = "utf-8",
     ):
         self._encoding = encoding
-        self._cacheable = "r" in parent.mode
+        self._cacheable = not parent.writable()
         self.length_mode = length_mode
         size = count if length_mode else tell_end(parent)
         super().__init__(parent, offset, size, name="SGA ToC Name Buffer")
@@ -317,7 +316,7 @@ class SgaNameWindow(BinaryWindow):
         if self.length_mode:
             self.seek(0)
             buffer = self.read()
-            names = buffer.split(b"\0")
+            names:List[bytes] = buffer.split(b"\0")
             counter = 0
             for name in names:
                 self._cache[counter] = name.decode(self._encoding)
@@ -382,6 +381,13 @@ class SgaTocInfoArea(Generic[T]):
             )
         else:
             return self.__get_window(item)
+
+    def __len__(self):
+        return self._info_count
+
+    def __iter__(self) -> Iterable[T]:
+        for _ in range(self._info_count):
+            yield self[_]
 
 
 class SgaTocFile:
@@ -458,7 +464,7 @@ class SgaFile(LazyBinary):
         self._write_bytes(buffer, *self._VERSION)
 
     @property
-    def meta(self) -> SgaMetaBlock:
+    def meta(self) -> SgaHeader:
         raise NotImplementedError
 
     @property
