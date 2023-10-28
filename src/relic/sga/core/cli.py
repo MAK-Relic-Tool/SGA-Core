@@ -93,7 +93,7 @@ class RelicSgaUnpackCli(CliPlugin):
         def _callback(_1: FS, srcfile: str, _2: FS, _3: str) -> None:
             print(f"\t\tUnpacking File `{srcfile}`")
 
-        fs.copy.copy_fs(f"sga://{infile}", f"osfs://{outdir}", on_copy=_callback)
+        fs.copy.copy_fs(f"sga://{infile}", f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
 
         return None  # To shut-up mypy
 
