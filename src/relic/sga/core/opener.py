@@ -202,7 +202,7 @@ class EssenceFSOpener(Opener):
 
         except (
             FileNotFoundError
-        ):  # FNF ~ close file (it shouldn't exist, but better safe then sorry)
+        ):  # FNF ~ close file (it shouldn't exist, but better safe than sorry)
             if create:
                 raise NotImplementedError("Cannot create a new SGA FS via open_fs")
                 # return EssenceFS()

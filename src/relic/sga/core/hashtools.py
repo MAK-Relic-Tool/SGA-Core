@@ -2,29 +2,31 @@ import hashlib
 import zlib
 from typing import BinaryIO, Optional, Callable, Generic, TypeVar, Type, Union
 
-from relic.core.errors import MismatchError
 from relic.core.lazyio import read_chunks
 
-T = TypeVar("T")
+from relic.sga.core.errors import (
+    HashMismatchError,
+    Md5MismatchError,
+    Crc32MismatchError,
+    Sha1MismatchError,
+)
+
+_T = TypeVar("_T")
+
+Hashable = Union[BinaryIO, bytes, bytes]
 
 
-class HashMismatchError(MismatchError[T], Generic[T]):
-    """
-    A sentinel class for catching all hash mismatch errors.
-    """
-
-    ...
-
-
-Hashable = Union[BinaryIO, bytes]
-
-
-class _Hasher(Generic[T]):
+# TODO
+#   At the time it felt like having an objec that stores the window informatino was a good thing
+#   However; we never cache the windowed hashers because we rarely can garuntee that the window is the same size
+#   Furthermore, we rarely want to hash multiple times and if the result is cached, we never re-call our hash object
+#       I'd say keep the functionality, but make these 'classmethods'
+class _Hasher(Generic[_T]):
     HASHER_NAME = "Hash"
 
     def __init__(
         self,
-        hash_func: Callable[[Hashable], T],
+        hash_func: Callable[[Hashable], _T],
         error_cls: Type[HashMismatchError] = HashMismatchError,
     ):
         self._hasher = hash_func
@@ -36,21 +38,17 @@ class _Hasher(Generic[T]):
     def __call__(self, stream: Hashable):
         return self.hash(stream=stream)
 
-    def hash(self, stream: Hashable) -> T:
+    def hash(self, stream: Hashable) -> _T:
         return self._hasher(stream)
 
-    def check(self, stream: Hashable, expected: T):
+    def check(self, stream: Hashable, expected: _T):
         result = self.hash(stream=stream)
         return result == expected
 
-    def validate(self, stream: Hashable, expected: T, *, name: Optional[str] = None):
+    def validate(self, stream: Hashable, expected: _T, *, name: Optional[str] = None):
         result = self.hash(stream=stream)
         if result != expected:
             raise self._error(name or self.HASHER_NAME, result, expected)
-
-
-class Md5MismatchError(HashMismatchError[bytes]):  #
-    ...
 
 
 class md5(_Hasher[bytes]):
@@ -84,10 +82,6 @@ class md5(_Hasher[bytes]):
         return _md5
 
 
-class Crc32MismatchError(HashMismatchError[int]):
-    ...
-
-
 class crc32(_Hasher[int]):
     HASHER_NAME = "CRC 32"
 
@@ -113,10 +107,6 @@ class crc32(_Hasher[int]):
             return crc
 
         return _crc32
-
-
-class Sha1MismatchError(HashMismatchError[bytes]):  #
-    ...
 
 
 class sha1(_Hasher[bytes]):

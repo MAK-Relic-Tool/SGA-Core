@@ -1,10 +1,21 @@
 """
 Error definitions for the SGA API
 """
-from typing import List, Optional
+from typing import List, Optional, Generic, TypeVar
 
 from relic.core.errors import MismatchError, RelicToolError
 from relic.sga.core.definitions import Version
+
+_T = TypeVar("_T")
+
+
+class MagicMismatchError(MismatchError[bytes]):
+    """
+    The archive did not specify the correct magic word
+    """
+
+    def __init__(self, received: Optional[bytes], expected: Optional[bytes] = None):
+        super().__init__("Magic Word", received, expected)
 
 
 class VersionMismatchError(MismatchError[Version]):
@@ -16,17 +27,6 @@ class VersionMismatchError(MismatchError[Version]):
         self, received: Optional[Version] = None, expected: Optional[Version] = None
     ):
         super().__init__("Version", received, expected)
-
-
-class MD5MismatchError(MismatchError[bytes]):
-    """
-    An archive or file did not pass the redundancy check.
-    """
-
-    def __init__(
-        self, received: Optional[bytes] = None, expected: Optional[bytes] = None
-    ):
-        super().__init__("MD5", received, expected)
 
 
 class VersionNotSupportedError(RelicToolError):
@@ -56,9 +56,32 @@ class DecompressedSizeMismatch(MismatchError[int]):
         super().__init__("Decompressed Size", received, expected)
 
 
+class HashMismatchError(MismatchError[_T], Generic[_T]):
+    """
+    A sentinel class for catching all hash mismatch errors.
+    """
+
+    ...
+
+
+class Md5MismatchError(HashMismatchError[bytes]):  #
+    ...
+
+
+class Crc32MismatchError(HashMismatchError[int]):
+    ...
+
+
+class Sha1MismatchError(HashMismatchError[bytes]):  #
+    ...
+
+
 __all__ = [
     "VersionMismatchError",
-    "MD5MismatchError",
     "VersionNotSupportedError",
     "DecompressedSizeMismatch",
+    "HashMismatchError",
+    "Md5MismatchError",
+    "Crc32MismatchError",
+    "Sha1MismatchError",
 ]

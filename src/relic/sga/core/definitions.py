@@ -11,13 +11,15 @@ from relic.core.errors import MismatchError
 from serialization_tools.magic import MagicWordIO
 from serialization_tools.structx import Struct
 
+from relic.sga.core.errors import MagicMismatchError
+
 MagicWord = MagicWordIO(Struct("< 8s"), "_ARCHIVE".encode("ascii"))
 
 
 def _validate_magic_word(self: MagicWordIO, stream: BinaryIO, advance: bool) -> None:
     magic = self.read_magic_word(stream, advance)
     if magic != self.word:
-        raise MismatchError("MagicWord", magic, self.word)
+        raise MagicMismatchError(magic, self.word)
 
 
 @dataclass
