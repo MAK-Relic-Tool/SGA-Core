@@ -1,14 +1,32 @@
 from __future__ import annotations
 
-from typing import BinaryIO, ClassVar, Tuple, Generic, Type, Optional, List, Protocol, Union, Iterable
-
-from relic.core.lazyio import BinaryWindow, tell_end, T, BinaryProxySerializer, BinaryProxy
+from typing import (
+    BinaryIO,
+    ClassVar,
+    Tuple,
+    Generic,
+    Type,
+    Optional,
+    List,
+    Protocol,
+    Union,
+    Iterable, TypeVar,
+)
+from relic.core.lazyio import (
+    BinaryWindow,
+    tell_end,
+    BinaryProxySerializer,
+    BinaryProxy,
+)
 
 from relic.sga.core import Version, StorageType
 
+_T = TypeVar("_T")
 
-def _safe_get_parent_name(parent:BinaryIO, default:Optional[str]=None):
-    return default if not hasattr(parent,"name") else parent.name
+
+def _safe_get_parent_name(parent: BinaryIO, default: Optional[str] = None):
+    return default if not hasattr(parent, "name") else parent.name
+
 
 class ArchivePtrs(Protocol):
     @property
@@ -53,7 +71,6 @@ class SgaHeader(BinaryProxySerializer, ArchivePtrs):
         raise NotImplementedError
 
 
-
 class SgaTocHeader(BinaryProxySerializer):
     _DRIVE_POS: ClassVar[Tuple[int, int]] = None
     _DRIVE_COUNT: ClassVar[Tuple[int, int]] = None
@@ -65,7 +82,9 @@ class SgaTocHeader(BinaryProxySerializer):
     _NAME_COUNT: ClassVar[Tuple[int, int]] = None
 
     class TablePointer:
-        def __init__(self, parent:SgaTocHeader, pos:Tuple[int,int], count:Tuple[int,int]):
+        def __init__(
+                self, parent: SgaTocHeader, pos: Tuple[int, int], count: Tuple[int, int]
+        ):
             self._POS = pos
             self._COUNT = count
             self._serializer = parent._serializer
@@ -76,7 +95,7 @@ class SgaTocHeader(BinaryProxySerializer):
 
         @offset.setter
         def offset(self, value: int):
-            self._serializer.int.write(value,*self._POS)
+            self._serializer.int.write(value, *self._POS)
 
         @property
         def count(self):
@@ -84,8 +103,7 @@ class SgaTocHeader(BinaryProxySerializer):
 
         @count.setter
         def count(self, value: int):
-            self._serializer.int.write(value,*self._COUNT)
-
+            self._serializer.int.write(value, *self._COUNT)
 
         @property
         def info(self) -> Tuple[int, int]:
@@ -101,10 +119,10 @@ class SgaTocHeader(BinaryProxySerializer):
         super().__init__(
             parent,
         )
-        self._drive = self.TablePointer(self,self._DRIVE_POS,self._DRIVE_COUNT)
-        self._folder = self.TablePointer(self,self._FOLDER_POS,self._FOLDER_COUNT)
-        self._file = self.TablePointer(self,self._FILE_POS,self._FILE_COUNT)
-        self._name = self.TablePointer(self,self._NAME_POS,self._NAME_COUNT)
+        self._drive = self.TablePointer(self, self._DRIVE_POS, self._DRIVE_COUNT)
+        self._folder = self.TablePointer(self, self._FOLDER_POS, self._FOLDER_COUNT)
+        self._file = self.TablePointer(self, self._FILE_POS, self._FILE_COUNT)
+        self._name = self.TablePointer(self, self._NAME_POS, self._NAME_COUNT)
 
     # DRIVE
     @property
@@ -124,7 +142,6 @@ class SgaTocHeader(BinaryProxySerializer):
         return self._name
 
 
-
 class SgaTocDrive(BinaryProxySerializer):
     _ALIAS = None
     _NAME = None
@@ -134,7 +151,7 @@ class SgaTocDrive(BinaryProxySerializer):
     _LAST_FILE = None
     _ROOT_FOLDER = None
     _SIZE = None
-    _INT_FORMAT = {"byteorder":"little","signed":False}
+    _INT_FORMAT = {"byteorder": "little", "signed": False}
     _STR_ENC = "ascii"
     _STR_PAD = "\0"
 
@@ -145,34 +162,42 @@ class SgaTocDrive(BinaryProxySerializer):
 
     @property
     def alias(self):
-        return self._serializer.c_string.read(*self._ALIAS,encoding=self._STR_ENC,padding=self._STR_PAD)
+        return self._serializer.c_string.read(
+            *self._ALIAS, encoding=self._STR_ENC, padding=self._STR_PAD
+        )
 
     @alias.setter
-    def alias(self, value:str):
-        self._serializer.c_string.write(value, *self._ALIAS,encoding=self._STR_ENC,padding=self._STR_PAD)
+    def alias(self, value: str):
+        self._serializer.c_string.write(
+            value, *self._ALIAS, encoding=self._STR_ENC, padding=self._STR_PAD
+        )
 
     @property
     def name(self):
-        return self._serializer.c_string.read(*self._NAME,encoding=self._STR_ENC,padding=self._STR_PAD)
+        return self._serializer.c_string.read(
+            *self._NAME, encoding=self._STR_ENC, padding=self._STR_PAD
+        )
 
     @name.setter
-    def name(self, value:str):
-        self._serializer.c_string.write(value, *self._NAME,encoding=self._STR_ENC,padding=self._STR_PAD)
+    def name(self, value: str):
+        self._serializer.c_string.write(
+            value, *self._NAME, encoding=self._STR_ENC, padding=self._STR_PAD
+        )
 
     @property
     def first_folder(self):
         return self._serializer.int.read(*self._FIRST_FOLDER, **self._INT_FORMAT)
 
     @first_folder.setter
-    def first_folder(self, value:int):
-        self._serializer.int.write(value,*self._FIRST_FOLDER, **self._INT_FORMAT)
+    def first_folder(self, value: int):
+        self._serializer.int.write(value, *self._FIRST_FOLDER, **self._INT_FORMAT)
 
     @property
     def last_folder(self):
         return self._serializer.int.read(*self._LAST_FOLDER, **self._INT_FORMAT)
 
     @last_folder.setter
-    def last_folder(self, value:int):
+    def last_folder(self, value: int):
         self._serializer.int.write(value, *self._LAST_FOLDER, **self._INT_FORMAT)
 
     @property
@@ -183,11 +208,9 @@ class SgaTocDrive(BinaryProxySerializer):
     def first_file(self, value: int):
         self._serializer.int.write(value, *self._FIRST_FILE, **self._INT_FORMAT)
 
-
     @property
     def last_file(self):
         return self._serializer.int.read(*self._LAST_FILE, **self._INT_FORMAT)
-
 
     @last_file.setter
     def last_file(self, value: int):
@@ -198,7 +221,7 @@ class SgaTocDrive(BinaryProxySerializer):
         return self._serializer.int.read(*self._ROOT_FOLDER, **self._INT_FORMAT)
 
     @root_folder.setter
-    def root_folder(self, value:int):
+    def root_folder(self, value: int):
         self._serializer.int.write(value, *self._ROOT_FOLDER, **self._INT_FORMAT)
 
 
@@ -209,62 +232,60 @@ class SgaTocFolder(BinaryProxySerializer):
     _FIRST_FILE = None
     _LAST_FILE = None
     _SIZE = None
-    _INT_FORMAT = {"byteorder":"little","signed":False}
+    _INT_FORMAT = {"byteorder": "little", "signed": False}
 
     def __init__(self, parent: BinaryIO):
-        super().__init__(
-            parent
-        )
+        super().__init__(parent)
 
     @property
     def name_offset(self):
-        return self._serializer.int.read(*self._NAME_OFFSET,**self._INT_FORMAT)
+        return self._serializer.int.read(*self._NAME_OFFSET, **self._INT_FORMAT)
 
     @name_offset.setter
     def name_offset(self, value):
-        self._serializer.int.write(value,*self._NAME_OFFSET, **self._INT_FORMAT)
+        self._serializer.int.write(value, *self._NAME_OFFSET, **self._INT_FORMAT)
 
     @property
     def first_folder(self):
-        return self._serializer.int.read(*self._SUB_FOLDER_START,**self._INT_FORMAT)
+        return self._serializer.int.read(*self._SUB_FOLDER_START, **self._INT_FORMAT)
 
     @first_folder.setter
     def first_folder(self, value):
-        self._serializer.int.write(value,*self._SUB_FOLDER_START, **self._INT_FORMAT)
+        self._serializer.int.write(value, *self._SUB_FOLDER_START, **self._INT_FORMAT)
 
     @property
     def last_folder(self):
-        return self._serializer.int.read(*self._SUB_FOLDER_STOP,**self._INT_FORMAT)
+        return self._serializer.int.read(*self._SUB_FOLDER_STOP, **self._INT_FORMAT)
 
     @last_folder.setter
     def last_folder(self, value):
-        self._serializer.int.write(value,*self._SUB_FOLDER_STOP, **self._INT_FORMAT)
+        self._serializer.int.write(value, *self._SUB_FOLDER_STOP, **self._INT_FORMAT)
 
     @property
     def first_file(self):
-        return self._serializer.int.read(*self._FIRST_FILE,**self._INT_FORMAT)
+        return self._serializer.int.read(*self._FIRST_FILE, **self._INT_FORMAT)
 
     @first_file.setter
     def first_file(self, value):
-        self._serializer.int.write(value,*self._FIRST_FILE, **self._INT_FORMAT)
+        self._serializer.int.write(value, *self._FIRST_FILE, **self._INT_FORMAT)
 
     @property
     def last_file(self):
-        return self._serializer.int.read(*self._LAST_FILE,**self._INT_FORMAT)
+        return self._serializer.int.read(*self._LAST_FILE, **self._INT_FORMAT)
 
     @last_file.setter
     def last_file(self, value):
-        self._serializer.int.write(value,*self._LAST_FILE, **self._INT_FORMAT)
+        self._serializer.int.write(value, *self._LAST_FILE, **self._INT_FORMAT)
 
 
 class SgaNameWindow(BinaryProxySerializer):
     def __init__(
-        self,
-        parent: BinaryIO,
-        offset: int,
-        count: int,
-        length_mode: bool = False,
-        encoding: str = "utf-8",
+            self,
+            parent: BinaryIO,
+            offset: int,
+            count: int,
+            length_mode: bool = False,
+            encoding: str = "utf-8",
     ):
         size = count if length_mode else tell_end(parent)
         self._window = BinaryWindow(parent, offset, size, name="SGA ToC Name Buffer")
@@ -287,7 +308,7 @@ class SgaNameWindow(BinaryProxySerializer):
         if self.length_mode:
             self._serializer.stream.seek(0)
             buffer = self._serializer.stream.read()
-            names:List[bytes] = buffer.split(b"\0")
+            names: List[bytes] = buffer.split(b"\0")
             counter = 0
             for name in names:
                 self._cache[counter] = name.decode(self._encoding)
@@ -295,7 +316,7 @@ class SgaNameWindow(BinaryProxySerializer):
 
     @staticmethod
     def _read_until_terminal(
-        stream: BinaryIO, start: int, buffer_size: int = 64, terminal: bytes = b"\x00"
+            stream: BinaryIO, start: int, buffer_size: int = 64, terminal: bytes = b"\x00"
     ):
         parts = []
         stream.seek(start)
@@ -320,15 +341,21 @@ class SgaNameWindow(BinaryProxySerializer):
         return name
 
 
-class SgaTocInfoArea(Generic[T]):
-    def __init__(self, parent: Union[BinaryIO,BinaryProxy], offset: int, count: int, cls: Type[T]):
+class SgaTocInfoArea(Generic[_T]):
+    def __init__(
+            self,
+            parent: Union[BinaryIO, BinaryProxy],
+            offset: int,
+            count: int,
+            cls: Type[_T],
+    ):
         self._parent = parent
         self._cls = cls
         self._windows = {}
         self._info_offset = offset
         self._info_count = count
 
-    def __get_window(self, index: int) -> T:
+    def __get_window(self, index: int) -> _T:
         offset, count = self._info_offset, self._info_count
         if not (0 <= index < count):
             raise IndexError(index, f"Valid indexes are ['{0}', '{count}')")
@@ -345,7 +372,7 @@ class SgaTocInfoArea(Generic[T]):
 
         return self._windows[index]
 
-    def __getitem__(self, item: Union[int, slice]) -> Union[T, List[T]]:
+    def __getitem__(self, item: Union[int, slice]) -> Union[_T, List[_T]]:
         if isinstance(item, slice):
             return list(
                 self.__get_window(index) for index in item.indices(self._info_count)
@@ -356,7 +383,7 @@ class SgaTocInfoArea(Generic[T]):
     def __len__(self):
         return self._info_count
 
-    def __iter__(self) -> Iterable[T]:
+    def __iter__(self) -> Iterable[_T]:
         for _ in range(self._info_count):
             yield self[_]
 
@@ -412,9 +439,9 @@ class SgaFile(BinaryProxySerializer):
     _MAGIC_WORD = (0, 8)
     _VERSION = (8, 4)
     _MAGIC_VERSION_SIZE = 12
-    _VERSION_INT_FMT = {"byteorder":"little","signed":False}
+    _VERSION_INT_FMT = {"byteorder": "little", "signed": False}
 
-    def __init__(self, parent: Union[BinaryIO,BinaryProxy]):
+    def __init__(self, parent: Union[BinaryIO, BinaryProxy]):
         super().__init__(parent)
 
     @property
@@ -424,8 +451,8 @@ class SgaFile(BinaryProxySerializer):
     @property
     def version(self) -> Version:
         buffer = self._serializer.read_bytes(*self._VERSION)
-        major = self._serializer.uint16.unpack(buffer[:2],**self._VERSION_INT_FMT)
-        minor = self._serializer.uint16.unpack(buffer[2:],**self._VERSION_INT_FMT)
+        major = self._serializer.uint16.unpack(buffer[:2], **self._VERSION_INT_FMT)
+        minor = self._serializer.uint16.unpack(buffer[2:], **self._VERSION_INT_FMT)
         return Version(major, minor)
 
     @version.setter
@@ -433,7 +460,7 @@ class SgaFile(BinaryProxySerializer):
         major = self._serializer.uint16.pack(value.major, **self._VERSION_INT_FMT)
         minor = self._serializer.uint16.pack(value.minor, **self._VERSION_INT_FMT)
         buffer = b"".join([major, minor])
-        self._serializer.write_bytes(buffer,*self._VERSION)
+        self._serializer.write_bytes(buffer, *self._VERSION)
 
     @property
     def meta(self) -> SgaHeader:

@@ -11,7 +11,8 @@ from typing import (
     runtime_checkable,
     Protocol,
     BinaryIO,
-    Collection, TypeVar,
+    Collection,
+    TypeVar,
 )
 
 import fs.opener
@@ -24,7 +25,7 @@ from relic.core.lazyio import BinaryWrapper
 from relic.sga.core import Version, MagicWord
 from relic.sga.core.definitions import _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
-from relic.sga.core.essencesfs import _EssenceFS as EssenceFS
+from relic.sga.core.essencefs import EssenceFS
 
 TKey = TypeVar("TKey")
 TValue = TypeVar("TValue")
@@ -129,14 +130,14 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
         return handler
 
     def _get_handler_from_stream(
-            self, sga_stream: BinaryIO, version: Optional[Version] = None
+        self, sga_stream: BinaryIO, version: Optional[Version] = None
     ) -> EssenceFSHandler:
         if version is None:
             version = self._read_magic_and_version(sga_stream)
         return self._get_handler(version)
 
     def _get_handler_from_fs(
-            self, sga_fs: EssenceFS, version: Optional[Version] = None
+        self, sga_fs: EssenceFS, version: Optional[Version] = None
     ) -> EssenceFSHandler:
         if version is None:
             sga_version: Dict[str, int] = sga_fs.getmeta("essence").get("version")  # type: ignore
@@ -144,13 +145,13 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
         return self._get_handler(version)
 
     def read(
-            self, sga_stream: BinaryIO, version: Optional[Version] = None
+        self, sga_stream: BinaryIO, version: Optional[Version] = None
     ) -> EssenceFS:
         handler = self._get_handler_from_stream(sga_stream, version)
         return handler.read(sga_stream)
 
     def write(
-            self, sga_stream: BinaryIO, sga_fs: EssenceFS, version: Optional[Version] = None
+        self, sga_stream: BinaryIO, sga_fs: EssenceFS, version: Optional[Version] = None
     ) -> int:
         handler = self._get_handler_from_fs(sga_fs, version)
         return handler.write(sga_stream, sga_fs)
@@ -168,12 +169,12 @@ class EssenceFSOpener(Opener):
     protocols = ["sga"]
 
     def open_fs(
-            self,
-            fs_url: str,
-            parse_result: ParseResult,
-            writeable: bool,
-            create: bool,
-            cwd: str,
+        self,
+        fs_url: str,
+        parse_result: ParseResult,
+        writeable: bool,
+        create: bool,
+        cwd: str,
     ) -> FS:
         # All EssenceFS should be writable; so we can ignore that
 
@@ -200,7 +201,7 @@ class EssenceFSOpener(Opener):
             return sga_fs
 
         except (
-                FileNotFoundError
+            FileNotFoundError
         ):  # FNF ~ close file (it shouldn't exist, but better safe then sorry)
             if create:
                 raise NotImplementedError("Cannot create a new SGA FS via open_fs")

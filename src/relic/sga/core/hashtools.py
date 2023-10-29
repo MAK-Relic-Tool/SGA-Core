@@ -15,7 +15,9 @@ class HashMismatchError(MismatchError[T], Generic[T]):
 
     ...
 
-Hashable = Union[BinaryIO,bytes]
+
+Hashable = Union[BinaryIO, bytes]
+
 
 class _Hasher(Generic[T]):
     HASHER_NAME = "Hash"

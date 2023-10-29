@@ -106,13 +106,16 @@ class StorageType(int, Enum):
     """
     Specifies whether data is stored as a 'raw blob' or as a 'zlib compressed blob'
     """
+
     # According to modpackager
     STORE = 0
     STREAM_COMPRESS = 1
     BUFFER_COMPRESS = 2
 
 
-class VerificationType(int, Enum): # TODO; consider not sharing this; this is format specific and wasn't introduced until V4? It could be reimplemented in each version; since each version probably has
+class VerificationType(
+    int, Enum
+):  # TODO; consider not sharing this; this is format specific and wasn't introduced until V4? It could be reimplemented in each version; since each version probably has
     """
     A 'Flag' used to specify how the data's Redundancy Check is stored.
     """

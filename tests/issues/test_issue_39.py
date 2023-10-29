@@ -10,7 +10,7 @@ from fs.base import FS
 from fs.memoryfs import MemoryFS
 
 from relic.sga.core import StorageType
-from relic.sga.core.essencesfs import EssenceFS
+from relic.sga.core.essencefs import EssenceFS
 
 
 @contextmanager
