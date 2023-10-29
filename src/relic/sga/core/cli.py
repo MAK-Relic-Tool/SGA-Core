@@ -19,7 +19,7 @@ class RelicSgaCli(CliPluginGroup):
     GROUP = "relic.cli.sga"
 
     def _create_parser(
-            self, command_group: Optional[_SubParsersAction] = None
+        self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
         if command_group is None:
             return ArgumentParser("sga")
@@ -67,7 +67,7 @@ def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
 
 class RelicSgaUnpackCli(CliPlugin):
     def _create_parser(
-            self, command_group: Optional[_SubParsersAction] = None
+        self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
         parser: ArgumentParser
         desc = """Unpack an SGA archive to the filesystem.
@@ -92,12 +92,14 @@ class RelicSgaUnpackCli(CliPlugin):
         sga_root_flags = parser.add_mutually_exclusive_group()
 
         sga_root_flags.add_argument(
-            "-m", "--merge",
+            "-m",
+            "--merge",
             help="SGA roots will always write to the same folder; specified by out_dir",
             action="store_true",
         )
         sga_root_flags.add_argument(
-            "-i", "--isolate",
+            "-i",
+            "--isolate",
             help="SGA roots will always write to separate folders, one per alias; located within out_dir",
             action="store_true",
         )
@@ -118,7 +120,10 @@ class RelicSgaUnpackCli(CliPlugin):
 
         if merge:  # we can short circuit the merge flag case
             copy_fs(
-                f"sga://{infile}", f"osfs://{outdir}", on_copy=_callback, preserve_time=True
+                f"sga://{infile}",
+                f"osfs://{outdir}",
+                on_copy=_callback,
+                preserve_time=True,
             )
             return _SUCCESS
 
@@ -127,16 +132,16 @@ class RelicSgaUnpackCli(CliPlugin):
         with open_fs(infile, default_protocol="sga") as sga:
             roots = list(sga.iterate_fs())
             if not isolate and len(roots) == 1:
-                copy_fs(
-                    sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True
-                )
+                copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
                 return _SUCCESS
 
             # Isolate or Implied Isolate
             with open_fs(outdir, writeable=True, create=True) as osfs:
                 for alias, subfs in roots:
                     with osfs.makedir(alias, recreate=True) as osfs_subfs:
-                        copy_fs(subfs, osfs_subfs, on_copy=_callback, preserve_time=True)
+                        copy_fs(
+                            subfs, osfs_subfs, on_copy=_callback, preserve_time=True
+                        )
 
         return _SUCCESS
 
@@ -145,7 +150,7 @@ class RelicSgaPackCli(CliPluginGroup):
     GROUP = "relic.cli.sga.pack"
 
     def _create_parser(
-            self, command_group: Optional[_SubParsersAction] = None
+        self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
         parser: ArgumentParser
         if command_group is None:
@@ -154,5 +159,3 @@ class RelicSgaPackCli(CliPluginGroup):
             parser = command_group.add_parser("pack")
 
         return parser
-
-

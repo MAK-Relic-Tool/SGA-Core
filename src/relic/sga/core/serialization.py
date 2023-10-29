@@ -10,7 +10,8 @@ from typing import (
     List,
     Protocol,
     Union,
-    Iterable, TypeVar,
+    Iterable,
+    TypeVar,
 )
 from relic.core.lazyio import (
     BinaryWindow,
@@ -83,7 +84,7 @@ class SgaTocHeader(BinaryProxySerializer):
 
     class TablePointer:
         def __init__(
-                self, parent: SgaTocHeader, pos: Tuple[int, int], count: Tuple[int, int]
+            self, parent: SgaTocHeader, pos: Tuple[int, int], count: Tuple[int, int]
         ):
             self._POS = pos
             self._COUNT = count
@@ -280,12 +281,12 @@ class SgaTocFolder(BinaryProxySerializer):
 
 class SgaNameWindow(BinaryProxySerializer):
     def __init__(
-            self,
-            parent: BinaryIO,
-            offset: int,
-            count: int,
-            length_mode: bool = False,
-            encoding: str = "utf-8",
+        self,
+        parent: BinaryIO,
+        offset: int,
+        count: int,
+        length_mode: bool = False,
+        encoding: str = "utf-8",
     ):
         size = count if length_mode else tell_end(parent)
         self._window = BinaryWindow(parent, offset, size, name="SGA ToC Name Buffer")
@@ -316,7 +317,7 @@ class SgaNameWindow(BinaryProxySerializer):
 
     @staticmethod
     def _read_until_terminal(
-            stream: BinaryIO, start: int, buffer_size: int = 64, terminal: bytes = b"\x00"
+        stream: BinaryIO, start: int, buffer_size: int = 64, terminal: bytes = b"\x00"
     ):
         parts = []
         stream.seek(start)
@@ -343,11 +344,11 @@ class SgaNameWindow(BinaryProxySerializer):
 
 class SgaTocInfoArea(Generic[_T]):
     def __init__(
-            self,
-            parent: Union[BinaryIO, BinaryProxy],
-            offset: int,
-            count: int,
-            cls: Type[_T],
+        self,
+        parent: Union[BinaryIO, BinaryProxy],
+        offset: int,
+        count: int,
+        cls: Type[_T],
     ):
         self._parent = parent
         self._cls = cls
