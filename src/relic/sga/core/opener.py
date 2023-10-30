@@ -23,7 +23,7 @@ from fs.opener.parse import ParseResult
 from relic.core.lazyio import BinaryWrapper
 
 from relic.sga.core import Version, MagicWord
-from relic.sga.core.definitions import _validate_magic_word
+from relic.sga.core.serialization import _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencefs import EssenceFS
 

@@ -1,6 +1,6 @@
 import hashlib
 import zlib
-from typing import BinaryIO, Optional, Callable, Generic, TypeVar, Type, Union
+from typing import BinaryIO, Optional, Generic, TypeVar, Type, Union, Protocol
 
 from relic.core.lazyio import read_chunks
 
@@ -13,128 +13,137 @@ from relic.sga.core.errors import (
 
 _T = TypeVar("_T")
 
-Hashable = Union[BinaryIO, bytes, bytes]
+Hashable = Union[BinaryIO, bytes, bytearray]
 
 
-# TODO
-#   At the time it felt like having an objec that stores the window informatino was a good thing
-#   However; we never cache the windowed hashers because we rarely can garuntee that the window is the same size
-#   Furthermore, we rarely want to hash multiple times and if the result is cached, we never re-call our hash object
-#       I'd say keep the functionality, but make these 'classmethods'
-class _Hasher(Generic[_T]):
-    HASHER_NAME = "Hash"
-
-    def __init__(
-        self,
-        hash_func: Callable[[Hashable], _T],
-        error_cls: Type[HashMismatchError] = HashMismatchError,
+class _HasherHashFunc(Protocol[_T]):
+    def __call__(
+            self,
+            stream: Hashable,
+            *,
+            start: Optional[int] = None,
+            size: Optional[int] = None,
+            eigen: Optional[_T] = None,
     ):
-        self._hasher = hash_func
-        # Allows us to override the error class,
-        # useful for catching different hash mismatches
-        # and handling them differently
-        self._error = error_cls
+        raise NotImplementedError
 
-    def __call__(self, stream: Hashable):
-        return self.hash(stream=stream)
 
-    def hash(self, stream: Hashable) -> _T:
-        return self._hasher(stream)
+class Hasher(Generic[_T]):
+    def __init__(
+            self,
+            hasher_name: str,
+            hash_func: _HasherHashFunc,
+            default_err_cls: Type[HashMismatchError[_T]] = HashMismatchError,
+    ):
+        self._hasher_name = hasher_name
+        self._default_err_cls = default_err_cls
+        self._hash_func = hash_func
+        if not hasattr(self,"__name__"):
+            self.__name__ = self._hasher_name
 
-    def check(self, stream: Hashable, expected: _T):
-        result = self.hash(stream=stream)
+    def __call__(
+            self,
+            stream: Hashable,
+            *,
+            start: Optional[int] = None,
+            size: Optional[int] = None,
+            eigen: Optional[_T] = None,
+    ):
+        return self.hash(stream=stream, start=start, size=size, eigen=eigen)
+
+    def hash(
+            self,
+            stream: Hashable,
+            *,
+            start: Optional[int] = None,
+            size: Optional[int] = None,
+            eigen: Optional[bytes] = None,
+    ) -> _T:
+        return self._hash_func(stream=stream, start=start, size=size, eigen=eigen)
+
+    def check(
+            self,
+            stream: Hashable,
+            expected: _T,
+            *,
+            start: Optional[int] = None,
+            size: Optional[int] = None,
+            eigen: Optional[bytes] = None,
+    ):
+        result = self.hash(stream=stream, start=start, size=size, eigen=eigen)
         return result == expected
 
-    def validate(self, stream: Hashable, expected: _T, *, name: Optional[str] = None):
-        result = self.hash(stream=stream)
+    def validate(
+            self,
+            stream: Hashable,
+            expected: _T,
+            *,
+            start: Optional[int] = None,
+            size: Optional[int] = None,
+            eigen: Optional[bytes] = None,
+            err_cls: Optional[Type[HashMismatchError]] = None,
+            name: Optional[str] = None,
+    ):
+        result = self.hash(stream=stream, start=start, size=size, eigen=eigen)
         if result != expected:
-            raise self._error(name or self.HASHER_NAME, result, expected)
+            if err_cls is None:
+                err_cls = self._default_err_cls
 
-
-class md5(_Hasher[bytes]):
-    HASHER_NAME = "MD5"
-
-    def __init__(
-        self,
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
-    ):
-        func = self.__factory(start=start, size=size, eigen=eigen)
-        super().__init__(func, error_cls=Md5MismatchError)
-
-    @staticmethod
-    def __factory(
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
-    ) -> Callable[[Hashable], bytes]:
-        def _md5(stream: Hashable) -> bytes:
-            hasher = (
-                hashlib.md5(eigen, usedforsecurity=False)
-                if eigen is not None
-                else hashlib.md5(usedforsecurity=False)
+            raise err_cls(
+                name if name is not None else self._hasher_name, result, expected
             )
-            for chunk in read_chunks(stream, start, size):
-                hasher.update(chunk)
-            return hasher.digest()
-
-        return _md5
 
 
-class crc32(_Hasher[int]):
-    HASHER_NAME = "CRC 32"
+def _md5(
+        stream: Hashable,
+        *,
+        start: Optional[int] = None,
+        size: Optional[int] = None,
+        eigen: Optional[bytes] = None,
+) -> _T:
+    hasher = (
+        hashlib.md5(eigen, usedforsecurity=False)
+        if eigen is not None
+        else hashlib.md5(usedforsecurity=False)
+    )
+    for chunk in read_chunks(stream, start, size):
+        hasher.update(chunk)
+    return hasher.digest()
 
-    def __init__(
-        self,
+
+def _crc32(
+        stream: Hashable,
+        *,
         start: Optional[int] = None,
         size: Optional[int] = None,
         eigen: Optional[int] = None,
-    ):
-        func = self.__factory(start=start, size=size, eigen=eigen)
-        super().__init__(func, error_cls=Crc32MismatchError)
+) -> int:
+    crc = eigen if eigen is not None else 0
+    for chunk in read_chunks(stream, start, size):
+        crc = zlib.crc32(chunk, crc)
+    return crc
 
-    @staticmethod
-    def __factory(
+
+def _sha1(
+        stream: Hashable,
+        *,
         start: Optional[int] = None,
         size: Optional[int] = None,
         eigen: Optional[int] = None,
-    ) -> Callable[[Hashable], int]:
-        def _crc32(stream: Hashable) -> int:
-            crc = eigen if eigen is not None else 0
-            for chunk in read_chunks(stream, start, size):
-                crc = zlib.crc32(chunk, crc)
-            return crc
+) -> bytes:
+    hasher = (
+        hashlib.sha1(eigen, usedforsecurity=False)
+        if eigen is not None
+        else hashlib.sha1(usedforsecurity=False)
+    )
+    for chunk in read_chunks(stream, start, size):
+        hasher.update(chunk)
+    return hasher.digest()
 
-        return _crc32
 
+# Create hashers bound to their hash method
+md5 = Hasher("MD5", _md5, Md5MismatchError)
+crc32 = Hasher("CRC-32", _crc32, Crc32MismatchError)
+sha1 = Hasher("SHA-1", _sha1, Sha1MismatchError)
 
-class sha1(_Hasher[bytes]):
-    HASHER_NAME = "SHA-1"
-
-    def __init__(
-        self,
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
-    ):
-        func = self.__factory(start=start, size=size, eigen=eigen)
-        super().__init__(func, error_cls=Sha1MismatchError)
-
-    @staticmethod
-    def __factory(
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
-    ) -> Callable[[Hashable], bytes]:
-        def _sha1(stream: Hashable) -> bytes:
-            hasher = (
-                hashlib.sha1(eigen, usedforsecurity=False)
-                if eigen is not None
-                else hashlib.sha1(usedforsecurity=False)
-            )
-            for chunk in read_chunks(stream, start, size):
-                hasher.update(chunk)
-            return hasher.digest()
-
-        return _sha1
+__all__ = ["Hashable", "md5", "crc32", "sha1", "Hasher"]
