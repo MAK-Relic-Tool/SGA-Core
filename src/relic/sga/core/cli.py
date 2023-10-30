@@ -30,15 +30,46 @@ class RelicSgaCli(CliPluginGroup):
 def _arg_exists_err(value: str) -> argparse.ArgumentTypeError:
     return argparse.ArgumentTypeError(f"The given path '{value}' does not exist!")
 
+def _get_path_validator(exists:bool) -> Callable[[str],str]:
+
+    def _path_type(path:str) -> str:
+
+        path = os.path.abspath(path)
+        def _step(_path: str) -> None:
+            parent, _ = os.path.split(_path)
+
+
+            if len(parent) != 0:
+                return _step(parent)
+
+            if not os.path.exists(parent):
+                return None
+
+            if os.path.isfile(parent):
+                raise argparse.ArgumentTypeError(f"The given path '{path}' is not a valid path; it treats a file ({parent}) as a directory!")
+
+            return None
+
+        if exists and not os.path.exists(path):
+            raise _arg_exists_err(path)
+
+        _step(path) # we want step to validate; but we dont care about its result
+
+        return path
+
+    return _path_type
+
+
 
 def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
+    validate_path = _get_path_validator(False)
     def _dir_type(path: str) -> str:
         path = os.path.abspath(path)
         if not os.path.exists(path):
             if exists:
                 raise _arg_exists_err(path)
             else:
-                return path
+                return validate_path(path)
 
         if os.path.isdir(path):
             return path
@@ -49,13 +80,14 @@ def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
 
 
 def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
+    validate_path = _get_path_validator(False)
     def _file_type(path: str) -> str:
         path = os.path.abspath(path)
         if not os.path.exists(path):
             if exists:
                 raise _arg_exists_err(path)
             else:
-                return path
+                return validate_path(path)
 
         if os.path.isfile(path):
             return path
