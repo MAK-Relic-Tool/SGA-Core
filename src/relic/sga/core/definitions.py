@@ -108,7 +108,7 @@ class StorageType(int, Enum):
 
 class VerificationType(
     int, Enum
-):  # TODO; consider not sharing this; this is format specific and wasn't introduced until V4? It could be reimplemented in each version; since each version probably has
+):  # TODO; consider not sharing this; this is format specific and wasn't introduced until V4? It could be reimplemented in each version; since each version may have different values
     """
     A 'Flag' used to specify how the data's Redundancy Check is stored.
     """
