@@ -22,7 +22,6 @@ class Version:
     major: int
     minor: int = 0
 
-
     def __str__(self) -> str:
         return f"Version {self.major}.{self.minor}"
 
@@ -36,30 +35,42 @@ class Version:
         else:
             raise KeyError(f"Index out of range, {item} not in [0,1]")
 
-
-    def as_tuple(self) -> Tuple[int,int]:
-        return tuple(self) # type: ignore
+    def as_tuple(self) -> Tuple[int, int]:
+        return tuple(self)  # type: ignore
 
     def __eq__(self, other: object) -> bool:
-        return self.as_tuple() == (other.as_tuple() if isinstance(other,Version) else other)
+        return self.as_tuple() == (
+            other.as_tuple() if isinstance(other, Version) else other
+        )
+
     def __ne__(self, other: object) -> bool:
-        return self.as_tuple() != (other.as_tuple() if isinstance(other,Version) else other)
+        return self.as_tuple() != (
+            other.as_tuple() if isinstance(other, Version) else other
+        )
 
     def __lt__(self, other: Any) -> bool:
-        return self.as_tuple() < (other.as_tuple() if isinstance(other,Version) else other)
-
+        return self.as_tuple() < (
+            other.as_tuple() if isinstance(other, Version) else other
+        )
 
     def __gt__(self, other: Any) -> bool:
-        return self.as_tuple() > (other.as_tuple() if isinstance(other,Version) else other)
+        return self.as_tuple() > (
+            other.as_tuple() if isinstance(other, Version) else other
+        )
 
     def __le__(self, other: Any) -> bool:
-        return self.as_tuple() <= (other.as_tuple() if isinstance(other,Version) else other)
+        return self.as_tuple() <= (
+            other.as_tuple() if isinstance(other, Version) else other
+        )
 
     def __ge__(self, other: Any) -> bool:
-        return self.as_tuple() >= (other.as_tuple() if isinstance(other,Version) else other)
+        return self.as_tuple() >= (
+            other.as_tuple() if isinstance(other, Version) else other
+        )
 
     def __hash__(self) -> int:
         return self.as_tuple().__hash__()
+
 
 class StorageType(int, Enum):
     """

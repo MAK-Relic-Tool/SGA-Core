@@ -477,10 +477,12 @@ class SgaFile(BinaryProxySerializer):
         raise NotImplementedError
 
 
-def _validate_magic_word(magic:bytes, stream: BinaryIO, advance: bool) -> None:
+def _validate_magic_word(magic: bytes, stream: BinaryIO, advance: bool) -> None:
     size = len(magic)
     if not advance:
-        with BinaryWindow(stream,start=stream.tell(),size=size) as window: #Use window to cheese 'peek' behaviour
+        with BinaryWindow(
+            stream, start=stream.tell(), size=size
+        ) as window:  # Use window to cheese 'peek' behaviour
             read_buffer = window.read()
     else:
         read_buffer = stream.read(size)
