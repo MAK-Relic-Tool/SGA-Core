@@ -6,7 +6,7 @@ import json
 import os.path
 from argparse import ArgumentParser, Namespace
 from json import JSONEncoder
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Dict
 
 from fs import open_fs
 from fs.base import FS
@@ -184,7 +184,7 @@ class RelicSgaUnpackCli(CliPlugin):
 
 
 class EssenceInfoEncoder(JSONEncoder):
-    def default(self, o:Any) -> Any:
+    def default(self, o: Any) -> Any:
         if dataclasses.is_dataclass(o):
             return dataclasses.asdict(o)
         try:
@@ -240,7 +240,7 @@ class RelicSgaInfoCli(CliPlugin):
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga: # type: ignore
+        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
             info = sga.info_tree()
 
             outjson_dir, outjson_file = os.path.split(outjson)
@@ -253,7 +253,7 @@ class RelicSgaInfoCli(CliPlugin):
             outjson = os.path.join(outjson_dir, outjson_file)
 
             with open(outjson, "w") as info_h:
-                json_kwargs = MINIFY_KWARGS if minify else MAXIFY_KWARGS
+                json_kwargs: Dict[str, Any] = MINIFY_KWARGS if minify else MAXIFY_KWARGS  # type: ignore
                 json.dump(info, info_h, cls=EssenceInfoEncoder, **json_kwargs)
 
         return _SUCCESS

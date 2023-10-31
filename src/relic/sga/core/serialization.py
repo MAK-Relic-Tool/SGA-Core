@@ -11,7 +11,8 @@ from typing import (
     Protocol,
     Union,
     Iterable,
-    TypeVar, Dict,
+    TypeVar,
+    Dict,
 )
 
 from relic.core.errors import RelicToolError
@@ -19,7 +20,8 @@ from relic.core.lazyio import (
     BinaryWindow,
     tell_end,
     BinaryProxySerializer,
-    BinaryProxy, BinaryWrapper,
+    BinaryProxy,
+    BinaryWrapper,
 )
 
 from relic.sga.core.definitions import Version, StorageType
@@ -87,7 +89,7 @@ class SgaTocHeader(BinaryProxySerializer):
 
     class TablePointer:
         def __init__(
-                self, parent: SgaTocHeader, pos: Tuple[int, int], count: Tuple[int, int]
+            self, parent: SgaTocHeader, pos: Tuple[int, int], count: Tuple[int, int]
         ):
             self._POS = pos
             self._COUNT = count
@@ -147,14 +149,14 @@ class SgaTocHeader(BinaryProxySerializer):
 
 
 class SgaTocDrive(BinaryProxySerializer):
-    _ALIAS = None
-    _NAME = None
-    _FIRST_FOLDER = None
-    _LAST_FOLDER = None
-    _FIRST_FILE = None
-    _LAST_FILE = None
-    _ROOT_FOLDER = None
-    _SIZE = None
+    _ALIAS: ClassVar[Tuple[int, int]] = None
+    _NAME: ClassVar[Tuple[int, int]] = None
+    _FIRST_FOLDER: ClassVar[Tuple[int, int]] = None
+    _LAST_FOLDER: ClassVar[Tuple[int, int]] = None
+    _FIRST_FILE: ClassVar[Tuple[int, int]] = None
+    _LAST_FILE: ClassVar[Tuple[int, int]] = None
+    _ROOT_FOLDER: ClassVar[Tuple[int, int]] = None
+    _SIZE: ClassVar[int] = None
     _INT_FORMAT = {"byteorder": "little", "signed": False}
     _STR_ENC = "ascii"
     _STR_PAD = "\0"
@@ -230,12 +232,12 @@ class SgaTocDrive(BinaryProxySerializer):
 
 
 class SgaTocFolder(BinaryProxySerializer):
-    _NAME_OFFSET = None
-    _SUB_FOLDER_START = None
-    _SUB_FOLDER_STOP = None
-    _FIRST_FILE = None
-    _LAST_FILE = None
-    _SIZE = None
+    _NAME_OFFSET: ClassVar[Tuple[int, int]] = None  # type: ignore
+    _SUB_FOLDER_START: ClassVar[Tuple[int, int]] = None  # type: ignore
+    _SUB_FOLDER_STOP: ClassVar[Tuple[int, int]] = None  # type: ignore
+    _FIRST_FILE: ClassVar[Tuple[int, int]] = None  # type: ignore
+    _LAST_FILE: ClassVar[Tuple[int, int]] = None  # type: ignore
+    _SIZE: ClassVar[int] = None  # type: ignore
     _INT_FORMAT = {"byteorder": "little", "signed": False}
 
     def __init__(self, parent: BinaryIO):
@@ -243,53 +245,73 @@ class SgaTocFolder(BinaryProxySerializer):
 
     @property
     def name_offset(self):
-        return self._serializer.int.read(*self._NAME_OFFSET, **self._INT_FORMAT)
+        return self._serializer.int.read(
+            *self._NAME_OFFSET, **self._INT_FORMAT
+        )  # type:ignore
 
     @name_offset.setter
-    def name_offset(self, value):
-        self._serializer.int.write(value, *self._NAME_OFFSET, **self._INT_FORMAT)
+    def name_offset(self, value: int):
+        self._serializer.int.write(
+            value, *self._NAME_OFFSET, **self._INT_FORMAT
+        )  # type:ignore
 
     @property
     def first_folder(self):
-        return self._serializer.int.read(*self._SUB_FOLDER_START, **self._INT_FORMAT)
+        return self._serializer.int.read(
+            *self._SUB_FOLDER_START, **self._INT_FORMAT
+        )  # type:ignore
 
     @first_folder.setter
-    def first_folder(self, value):
-        self._serializer.int.write(value, *self._SUB_FOLDER_START, **self._INT_FORMAT)
+    def first_folder(self, value: int):
+        self._serializer.int.write(
+            value, *self._SUB_FOLDER_START, **self._INT_FORMAT
+        )  # type:ignore
 
     @property
     def last_folder(self):
-        return self._serializer.int.read(*self._SUB_FOLDER_STOP, **self._INT_FORMAT)
+        return self._serializer.int.read(
+            *self._SUB_FOLDER_STOP, **self._INT_FORMAT
+        )  # type:ignore
 
     @last_folder.setter
-    def last_folder(self, value):
-        self._serializer.int.write(value, *self._SUB_FOLDER_STOP, **self._INT_FORMAT)
+    def last_folder(self, value: int):
+        self._serializer.int.write(
+            value, *self._SUB_FOLDER_STOP, **self._INT_FORMAT
+        )  # type:ignore
 
     @property
     def first_file(self):
-        return self._serializer.int.read(*self._FIRST_FILE, **self._INT_FORMAT)
+        return self._serializer.int.read(
+            *self._FIRST_FILE, **self._INT_FORMAT
+        )  # type:ignore
 
     @first_file.setter
-    def first_file(self, value):
-        self._serializer.int.write(value, *self._FIRST_FILE, **self._INT_FORMAT)
+    def first_file(self, value: int) -> None:
+        self._serializer.int.write(
+            value, *self._FIRST_FILE, **self._INT_FORMAT
+        )  # type:ignore
 
     @property
-    def last_file(self):
-        return self._serializer.int.read(*self._LAST_FILE, **self._INT_FORMAT)
+    def last_file(self) -> int:
+        return self._serializer.int.read(
+            *self._LAST_FILE, **self._INT_FORMAT
+        )  # type:ignore
 
     @last_file.setter
-    def last_file(self, value):
-        self._serializer.int.write(value, *self._LAST_FILE, **self._INT_FORMAT)
+    def last_file(self, value) -> None:
+        self._serializer.int.write(
+            value, *self._LAST_FILE, **self._INT_FORMAT
+        )  # type:ignore
 
 
 class SgaNameWindow(BinaryProxySerializer):
     def __init__(
-            self,
-            parent: BinaryIO,
-            offset: int,
-            count: int,
-            length_mode: bool = False,
-            encoding: str = "utf-8",
+        self,
+        parent: BinaryIO,
+        offset: int,
+        count: int,
+        length_mode: bool = False,
+        encoding: str = "utf-8",
     ):
         size = count if length_mode else tell_end(parent)
         self._window = BinaryWindow(parent, offset, size, name="SGA ToC Name Buffer")
@@ -299,10 +321,10 @@ class SgaNameWindow(BinaryProxySerializer):
         self._cacheable = parent.readable() and not parent.writable()
         self.length_mode = length_mode
 
-        self._cache = None
+        self._cache: Optional[Dict[int, str]] = None
         self._init_cache()
 
-    def _init_cache(self):
+    def _init_cache(self) -> None:
         if not self._cacheable:
             return
         if self._cache is None:
@@ -320,8 +342,8 @@ class SgaNameWindow(BinaryProxySerializer):
 
     @staticmethod
     def _read_until_terminal(
-            stream: BinaryIO, start: int, buffer_size: int = 64, terminal: bytes = b"\x00"
-    ):
+        stream: BinaryIO, start: int, buffer_size: int = 64, terminal: bytes = b"\x00"
+    ) -> bytes:
         parts = []
         stream.seek(start)
         while True:
@@ -345,32 +367,32 @@ class SgaNameWindow(BinaryProxySerializer):
         return name
 
 
-_TocWindowCls = TypeVar("_TocWindowCls", bound=BinaryWrapper)
+_TocWindowCls = TypeVar("_TocWindowCls", BinaryProxy, BinaryWrapper)
 
 
 class SgaTocInfoArea(Generic[_TocWindowCls]):
     def __init__(
-            self,
-            parent: Union[BinaryIO, BinaryProxy],
-            offset: int,
-            count: int,
-            cls: Type[_T],
-            cls_size: Optional[int] = None
+        self,
+        parent: Union[BinaryIO, BinaryProxy],
+        offset: int,
+        count: int,
+        cls: Type[_T],
+        cls_size: Optional[int] = None,
     ):
         self._parent = parent
         self._cls = cls
         if hasattr(self._cls, "_SIZE"):
-            self._cls_size = self._cls._SIZE
+            self._cls_size = self._cls._SIZE  # type: ignore
         elif cls_size is not None:
             self._cls_size = cls_size
         else:
             raise RelicToolError("TOC Window size could not be determined!")
 
-        self._windows:Dict[int,_T] = {}
+        self._windows: Dict[int, _TocWindowCls] = {}
         self._info_offset = offset
         self._info_count = count
 
-    def __get_window(self, index: int) -> _T:
+    def __get_window(self, index: int) -> _TocWindowCls:
         offset, count = self._info_offset, self._info_count
         if not (0 <= index < count):
             raise IndexError(index, f"Valid indexes are ['{0}', '{count}')")
@@ -387,20 +409,23 @@ class SgaTocInfoArea(Generic[_TocWindowCls]):
 
         return self._windows[index]
 
-    def __getitem__(self, item: Union[int, slice]) -> Union[_T, List[_T]]:
+    def __getitem__(
+        self, item: Union[int, slice]
+    ) -> Union[_TocWindowCls, List[_TocWindowCls]]:
         if isinstance(item, slice):
             return list(
-                self.__get_window(index) for index in item.indices(self._info_count)
+                self.__get_window(index)
+                for index in range(*item.indices(self._info_count))
             )
         else:
             return self.__get_window(item)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._info_count
 
-    def __iter__(self) -> Iterable[_T]:
+    def __iter__(self) -> Iterable[_TocWindowCls]:
         for index in range(self._info_count):
-            yield self[index]
+            yield self[index]  # type: ignore
 
 
 class SgaTocFile:
@@ -466,14 +491,14 @@ class SgaFile(BinaryProxySerializer):
     @property
     def version(self) -> Version:
         buffer = self._serializer.read_bytes(*self._VERSION)
-        major = self._serializer.uint16.unpack(buffer[:2], **self._VERSION_INT_FMT)
-        minor = self._serializer.uint16.unpack(buffer[2:], **self._VERSION_INT_FMT)
+        major = self._serializer.uint16.unpack(buffer[:2], **self._VERSION_INT_FMT)  # type: ignore
+        minor = self._serializer.uint16.unpack(buffer[2:], **self._VERSION_INT_FMT)  # type: ignore
         return Version(major, minor)
 
     @version.setter
-    def version(self, value: Version):
-        major = self._serializer.uint16.pack(value.major, **self._VERSION_INT_FMT)
-        minor = self._serializer.uint16.pack(value.minor, **self._VERSION_INT_FMT)
+    def version(self, value: Version) -> None:
+        major = self._serializer.uint16.pack(value.major, **self._VERSION_INT_FMT)  # type: ignore
+        minor = self._serializer.uint16.pack(value.minor, **self._VERSION_INT_FMT)  # type: ignore
         buffer = b"".join([major, minor])
         self._serializer.write_bytes(buffer, *self._VERSION)
 
@@ -494,7 +519,7 @@ def _validate_magic_word(magic: bytes, stream: BinaryIO, advance: bool) -> None:
     size = len(magic)
     if not advance:
         with BinaryWindow(
-                stream, start=stream.tell(), size=size
+            stream, start=stream.tell(), size=size
         ) as window:  # Use window to cheese 'peek' behaviour
             read_buffer = window.read()
     else:

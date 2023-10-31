@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Tuple, Iterable
+from typing import Any, Tuple, Iterable, Union
 
 MagicWord = "_ARCHIVE".encode("ascii")
 
@@ -29,11 +29,17 @@ class Version:
         yield self.major
         yield self.minor
 
-    def __getitem__(self, item) -> int:
-        if 0 <= item < 2:
-            return self.major if item is 0 else self.minor
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, item: Union[int, slice]) -> int:
+        if isinstance(item, slice):
+            return [self[i] for i in range(*item.indices(2))]
         else:
-            raise KeyError(f"Index out of range, {item} not in [0,1]")
+            if 0 <= item < 2:
+                return self.major if item is 0 else self.minor
+            else:
+                raise KeyError(f"Index out of range, {item} not in [0,1]")
 
     def as_tuple(self) -> Tuple[int, int]:
         return tuple(self)  # type: ignore
@@ -49,14 +55,16 @@ class Version:
         )
 
     def __lt__(self, other: Any) -> bool:
-        return self.as_tuple() < (
+        cmp: bool = self.as_tuple() < (
             other.as_tuple() if isinstance(other, Version) else other
         )
+        return cmp
 
     def __gt__(self, other: Any) -> bool:
-        return self.as_tuple() > (
+        cmp: bool = self.as_tuple() > (
             other.as_tuple() if isinstance(other, Version) else other
         )
+        return cmp
 
     def __le__(self, other: Any) -> bool:
         return self.as_tuple() <= (

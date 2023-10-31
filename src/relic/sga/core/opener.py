@@ -182,8 +182,10 @@ class EssenceFSOpener(Opener):
         # Resolve Path
         if fs_url == "sga://":
             if create:
-                raise RelicToolError("Cannot create an SGA from fs.open_fs;"
-                                     " please manually create an empty FS object from an appropriate SGA Plugin.")
+                raise RelicToolError(
+                    "Cannot create an SGA from fs.open_fs;"
+                    " please manually create an empty FS object from an appropriate SGA Plugin."
+                )
             else:
                 raise fs.opener.errors.OpenerError(
                     "No path was given and opener not marked for 'create'!"

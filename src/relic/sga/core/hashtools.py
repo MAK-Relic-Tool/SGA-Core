@@ -11,7 +11,8 @@ from relic.sga.core.errors import (
     Sha1MismatchError,
 )
 
-_T = TypeVar("_T",contravariant=True)
+_T_CON = TypeVar("_T_CON", contravariant=True)
+_T = TypeVar("_T")
 
 Hashable = Union[BinaryIO, bytes, bytearray]
 
@@ -24,7 +25,7 @@ class _HasherHashFunc(Protocol[_T]):
         start: Optional[int] = None,
         size: Optional[int] = None,
         eigen: Optional[_T] = None,
-    ):
+    ) -> _T:
         raise NotImplementedError
 
 
@@ -32,7 +33,7 @@ class Hasher(Generic[_T]):
     def __init__(
         self,
         hasher_name: str,
-        hash_func: _HasherHashFunc,
+        hash_func: _HasherHashFunc[_T],
         default_err_cls: Type[HashMismatchError[_T]] = HashMismatchError,
     ):
         self._hasher_name = hasher_name
@@ -48,7 +49,7 @@ class Hasher(Generic[_T]):
         start: Optional[int] = None,
         size: Optional[int] = None,
         eigen: Optional[_T] = None,
-    ):
+    ) -> _T:
         return self.hash(stream=stream, start=start, size=size, eigen=eigen)
 
     def hash(
@@ -57,7 +58,7 @@ class Hasher(Generic[_T]):
         *,
         start: Optional[int] = None,
         size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
+        eigen: Optional[_T] = None,
     ) -> _T:
         return self._hash_func(stream=stream, start=start, size=size, eigen=eigen)
 
@@ -68,8 +69,8 @@ class Hasher(Generic[_T]):
         *,
         start: Optional[int] = None,
         size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
-    ):
+        eigen: Optional[_T] = None,
+    ) -> bool:
         result = self.hash(stream=stream, start=start, size=size, eigen=eigen)
         return result == expected
 
@@ -80,10 +81,10 @@ class Hasher(Generic[_T]):
         *,
         start: Optional[int] = None,
         size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
-        err_cls: Optional[Type[HashMismatchError]] = None,
+        eigen: Optional[_T] = None,
+        err_cls: Optional[Type[HashMismatchError[_T]]] = None,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         result = self.hash(stream=stream, start=start, size=size, eigen=eigen)
         if result != expected:
             if err_cls is None:
