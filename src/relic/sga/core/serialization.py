@@ -19,7 +19,6 @@ from relic.core.lazyio import (
     BinaryProxySerializer,
     BinaryProxy,
 )
-from serialization_tools.magic import MagicWordIO
 
 from relic.sga.core import Version, StorageType
 from relic.sga.core.errors import MagicMismatchError
@@ -478,7 +477,13 @@ class SgaFile(BinaryProxySerializer):
         raise NotImplementedError
 
 
-def _validate_magic_word(self: MagicWordIO, stream: BinaryIO, advance: bool) -> None:
-    magic = self.read_magic_word(stream, advance)
-    if magic != self.word:
-        raise MagicMismatchError(magic, self.word)
+def _validate_magic_word(magic:bytes, stream: BinaryIO, advance: bool) -> None:
+    size = len(magic)
+    if not advance:
+        with BinaryWindow(stream,start=stream.tell(),size=size) as window: #Use window to cheese 'peek' behaviour
+            read_buffer = window.read()
+    else:
+        read_buffer = stream.read(size)
+
+    if read_buffer != magic:
+        raise MagicMismatchError(read_buffer, magic)

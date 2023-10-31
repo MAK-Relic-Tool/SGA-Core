@@ -5,12 +5,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import ClassVar, BinaryIO, Any
+from typing import Any, Tuple, Iterable
 
-from serialization_tools.magic import MagicWordIO
-from serialization_tools.structx import Struct
-
-MagicWord = MagicWordIO(Struct("< 8s"), "_ARCHIVE".encode("ascii"))
+MagicWord = "_ARCHIVE".encode("ascii")
 
 
 @dataclass
@@ -25,75 +22,44 @@ class Version:
     major: int
     minor: int = 0
 
-    LAYOUT: ClassVar[Struct] = Struct("<2H")
 
     def __str__(self) -> str:
         return f"Version {self.major}.{self.minor}"
 
+    def __iter__(self) -> Iterable[int]:
+        yield self.major
+        yield self.minor
+
+    def __getitem__(self, item):
+        if 0 <= item < 2:
+            return self.major if item is 0 else self.minor
+        else:
+            raise KeyError(f"Index out of range, {item} not in [0,1]")
+
+
+    def as_tuple(self) -> Tuple[int,int]:
+        return tuple(self) # type: ignore
+
     def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, Version)
-            and self.major == other.major
-            and self.minor == other.minor
-        )
+        return self.as_tuple() == (other.as_tuple() if isinstance(other,Version) else other)
+    def __ne__(self, other: object) -> bool:
+        return self.as_tuple() != (other.as_tuple() if isinstance(other,Version) else other)
 
     def __lt__(self, other: Any) -> bool:
-        if isinstance(other, Version):
-            return self.major < other.major or (
-                self.major == other.major and self.minor < other.minor
-            )
-        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+        return self.as_tuple() < (other.as_tuple() if isinstance(other,Version) else other)
+
 
     def __gt__(self, other: Any) -> bool:
-        if isinstance(other, Version):
-            return self.major > other.major or (
-                self.major == other.major and self.minor > other.minor
-            )
-        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+        return self.as_tuple() > (other.as_tuple() if isinstance(other,Version) else other)
 
     def __le__(self, other: Any) -> bool:
-        if isinstance(other, Version):
-            return self.major < other.major or (
-                self.major == other.major and self.minor <= other.minor
-            )
-        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+        return self.as_tuple() <= (other.as_tuple() if isinstance(other,Version) else other)
 
     def __ge__(self, other: Any) -> bool:
-        if isinstance(other, Version):
-            return self.major > other.major or (
-                self.major == other.major and self.minor >= other.minor
-            )
-        raise TypeError(f"Other is not an  instance of `{self.__class__}`!")
+        return self.as_tuple() >= (other.as_tuple() if isinstance(other,Version) else other)
 
     def __hash__(self) -> int:
-        # if this was C we could guarantee the hash was unique
-        # because major/minor would both be 16 bits and the hash would be 32
-        # Since python doesn't allow that we just assume data isn't garbage;
-        # garbage in => garbage out after all
-        return self.major << 16 + self.minor
-
-    @classmethod
-    def unpack(cls, stream: BinaryIO) -> Version:
-        """
-        Reads a version from the stream.
-        :param stream: Data stream to read from.
-        :return: A new Version instance.
-        """
-        layout: Struct = cls.LAYOUT
-        args = layout.unpack_stream(stream)
-        return cls(*args)
-
-    def pack(self, stream: BinaryIO) -> int:
-        """
-        Writes the version to the stream.
-        :param stream: Data stream to write to.
-        :return: Number of bytes written.
-        """
-        layout: Struct = self.LAYOUT
-        args = (self.major, self.minor)
-        packed: int = layout.pack_stream(stream, *args)
-        return packed
-
+        return self.as_tuple().__hash__()
 
 class StorageType(int, Enum):
     """
