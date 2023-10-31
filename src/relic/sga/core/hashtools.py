@@ -17,7 +17,7 @@ _T = TypeVar("_T")
 Hashable = Union[BinaryIO, bytes, bytearray]
 
 
-class _HasherHashFunc(Protocol[_T]):
+class _HasherHashFunc(Protocol[_T]):  # pylint disable: too-few-public-methods
     def __call__(
         self,
         stream: Hashable,

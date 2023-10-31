@@ -60,8 +60,7 @@ def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
         if not os.path.exists(path):
             if exists:
                 raise _arg_exists_err(path)
-            else:
-                return validate_path(path)
+            return validate_path(path)
 
         if os.path.isdir(path):
             return path
@@ -79,8 +78,7 @@ def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
         if not os.path.exists(path):
             if exists:
                 raise _arg_exists_err(path)
-            else:
-                return validate_path(path)
+            return validate_path(path)
 
         if os.path.isfile(path):
             return path
@@ -96,10 +94,10 @@ class RelicSgaCli(CliPluginGroup):
     def _create_parser(
         self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
+        name = "sga"
         if command_group is None:
-            return ArgumentParser("sga")
-        else:
-            return command_group.add_parser("sga")
+            return ArgumentParser(name)
+        return command_group.add_parser(name)
 
 
 class RelicSgaUnpackCli(CliPlugin):
@@ -165,7 +163,7 @@ class RelicSgaUnpackCli(CliPlugin):
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga: # type: ignore
+        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
             roots = list(sga.iterate_fs())
             # Implicit merge; we reuse sga to avoid reopening the filesystem
             if not isolate and len(roots) == 1:
@@ -196,6 +194,9 @@ class EssenceInfoEncoder(JSONEncoder):
 
 
 class RelicSgaInfoCli(CliPlugin):
+    _JSON_MINIFY_KWARGS = {"separators": (",", ":"), "indent": None}
+    _JSON_MAXIFY_KWARGS = {"separators": (", ", ": "), "indent": 4}
+
     def _create_parser(
         self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
@@ -233,9 +234,6 @@ class RelicSgaInfoCli(CliPlugin):
         outjson: str = ns.out_json
         minify: bool = ns.minify
 
-        MINIFY_KWARGS = {"separators": (",", ":"), "indent": None}
-        MAXIFY_KWARGS = {"separators": (", ", ": "), "indent": 4}
-
         print(f"Reading Info `{infile}`")
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
@@ -253,7 +251,9 @@ class RelicSgaInfoCli(CliPlugin):
             outjson = os.path.join(outjson_dir, outjson_file)
 
             with open(outjson, "w") as info_h:
-                json_kwargs: Dict[str, Any] = MINIFY_KWARGS if minify else MAXIFY_KWARGS  # type: ignore
+                json_kwargs: Dict[str, Any] = (  # type: ignore
+                    self._JSON_MINIFY_KWARGS if minify else self._JSON_MAXIFY_KWARGS
+                )
                 json.dump(info, info_h, cls=EssenceInfoEncoder, **json_kwargs)
 
         return _SUCCESS

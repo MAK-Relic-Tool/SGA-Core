@@ -61,10 +61,8 @@ class HashMismatchError(MismatchError[_T], Generic[_T]):
     A sentinel class for catching all hash mismatch errors.
     """
 
-    ...
 
-
-class Md5MismatchError(HashMismatchError[bytes]):  #
+class Md5MismatchError(HashMismatchError[bytes]):
     ...
 
 

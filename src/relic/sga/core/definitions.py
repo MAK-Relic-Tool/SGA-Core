@@ -32,7 +32,7 @@ class Version:
     def __len__(self) -> int:
         return 2
 
-    def __getitem__(self, item: Union[int, slice]) -> Union[int,List[int]]:
+    def __getitem__(self, item: Union[int, slice]) -> Union[int, List[int]]:
         return self.as_tuple()[item]
 
     def as_tuple(self) -> Tuple[int, int]:
@@ -61,13 +61,13 @@ class Version:
         return cmp
 
     def __le__(self, other: Any) -> bool:
-        cmp:bool = self.as_tuple() <= (
+        cmp: bool = self.as_tuple() <= (
             other.as_tuple() if isinstance(other, Version) else other
         )
         return cmp
 
     def __ge__(self, other: Any) -> bool:
-        cmp:bool = self.as_tuple() >= (
+        cmp: bool = self.as_tuple() >= (
             other.as_tuple() if isinstance(other, Version) else other
         )
         return cmp

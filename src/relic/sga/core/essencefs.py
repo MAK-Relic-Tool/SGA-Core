@@ -7,8 +7,6 @@ from fs.base import FS
 
 
 class EssenceFS(FS, ABC):
-    ...
-
     def iterate_fs(self) -> Iterator[Tuple[str, FS]]:
         raise NotImplementedError
 
