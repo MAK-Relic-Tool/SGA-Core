@@ -24,7 +24,7 @@ from relic.core.errors import RelicToolError
 from relic.core.lazyio import BinaryWrapper
 
 from relic.sga.core.definitions import Version, MagicWord
-from relic.sga.core.serialization import _validate_magic_word
+from relic.sga.core.serialization import _validate_magic_word, VersionSerializer
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencefs import EssenceFS
 
@@ -119,7 +119,7 @@ class EssenceFSFactory(EntrypointRegistry[Version, EssenceFSHandler]):
         # sga_stream.seek(0)
         jump_back = sga_stream.tell()
         _validate_magic_word(MagicWord, sga_stream, advance=True)
-        version = Version.unpack(sga_stream)
+        version = VersionSerializer.read(sga_stream)
         sga_stream.seek(jump_back)
         return version
 
@@ -186,10 +186,9 @@ class EssenceFSOpener(Opener):
                     "Cannot create an SGA from fs.open_fs;"
                     " please manually create an empty FS object from an appropriate SGA Plugin."
                 )
-            else:
-                raise fs.opener.errors.OpenerError(
-                    "No path was given and opener not marked for 'create'!"
-                )
+            raise fs.opener.errors.OpenerError(
+                "No path was given and opener not marked for 'create'!"
+            )
 
         _path = os.path.abspath(os.path.join(cwd, expanduser(parse_result.resource)))
         path = os.path.normpath(_path)

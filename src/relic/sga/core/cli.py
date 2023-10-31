@@ -165,7 +165,7 @@ class RelicSgaUnpackCli(CliPlugin):
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga:
+        with open_fs(infile, default_protocol="sga") as sga: # type: ignore
             roots = list(sga.iterate_fs())
             # Implicit merge; we reuse sga to avoid reopening the filesystem
             if not isolate and len(roots) == 1:
