@@ -18,18 +18,16 @@ from relic.sga.core.essencefs import EssenceFS
 _SUCCESS = 0
 
 
-
 def _arg_exists_err(value: str) -> argparse.ArgumentTypeError:
     return argparse.ArgumentTypeError(f"The given path '{value}' does not exist!")
 
-def _get_path_validator(exists:bool) -> Callable[[str],str]:
 
-    def _path_type(path:str) -> str:
-
+def _get_path_validator(exists: bool) -> Callable[[str], str]:
+    def _path_type(path: str) -> str:
         path = os.path.abspath(path)
+
         def _step(_path: str) -> None:
             parent, _ = os.path.split(_path)
-
 
             if len(parent) != 0:
                 return _step(parent)
@@ -38,23 +36,25 @@ def _get_path_validator(exists:bool) -> Callable[[str],str]:
                 return None
 
             if os.path.isfile(parent):
-                raise argparse.ArgumentTypeError(f"The given path '{path}' is not a valid path; it treats a file ({parent}) as a directory!")
+                raise argparse.ArgumentTypeError(
+                    f"The given path '{path}' is not a valid path; it treats a file ({parent}) as a directory!"
+                )
 
             return None
 
         if exists and not os.path.exists(path):
             raise _arg_exists_err(path)
 
-        _step(path) # we want step to validate; but we dont care about its result
+        _step(path)  # we want step to validate; but we dont care about its result
 
         return path
 
     return _path_type
 
 
-
 def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
     validate_path = _get_path_validator(False)
+
     def _dir_type(path: str) -> str:
         path = os.path.abspath(path)
         if not os.path.exists(path):
@@ -73,6 +73,7 @@ def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
 
 def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
     validate_path = _get_path_validator(False)
+
     def _file_type(path: str) -> str:
         path = os.path.abspath(path)
         if not os.path.exists(path):
@@ -87,6 +88,7 @@ def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
         raise argparse.ArgumentTypeError(f"The given path '{path}' is not a file!")
 
     return _file_type
+
 
 class RelicSgaCli(CliPluginGroup):
     GROUP = "relic.cli.sga"
@@ -187,9 +189,10 @@ class EssenceInfoEncoder(JSONEncoder):
             return dataclasses.asdict(o)
         try:
             return super().default(o)
-        except TypeError: # Kinda bad; but we don't want to serialize, we want to print; so i think this is an acceptable tradeoff
+        except (
+            TypeError
+        ):  # Kinda bad; but we don't want to serialize, we want to print; so i think this is an acceptable tradeoff
             return str(o)
-
 
 
 class RelicSgaInfoCli(CliPlugin):
@@ -216,7 +219,8 @@ class RelicSgaInfoCli(CliPlugin):
             help="Output File or Directory",
         )
         parser.add_argument(
-            "-m", "--minify",
+            "-m",
+            "--minify",
             action="store_true",
             default=False,
             help="Minifies the resulting json by stripping whitespace, newlines, and indentations. Reduces filesize",
@@ -227,10 +231,10 @@ class RelicSgaInfoCli(CliPlugin):
     def command(self, ns: Namespace) -> Optional[int]:
         infile: str = ns.src_sga
         outjson: str = ns.out_json
-        minify:bool = ns.minify
+        minify: bool = ns.minify
 
-        MINIFY_KWARGS = {"separators":(',',':'),'indent':None}
-        MAXIFY_KWARGS = {"separators":(', ', ': '),'indent':4}
+        MINIFY_KWARGS = {"separators": (",", ":"), "indent": None}
+        MAXIFY_KWARGS = {"separators": (", ", ": "), "indent": 4}
 
         print(f"Reading Info `{infile}`")
 
@@ -246,13 +250,14 @@ class RelicSgaInfoCli(CliPlugin):
                 outjson_file = os.path.splitext(os.path.split(infile)[1])[0] + ".json"
 
             os.makedirs(outjson_dir, exist_ok=True)
-            outjson = os.path.join(outjson_dir,outjson_file)
+            outjson = os.path.join(outjson_dir, outjson_file)
 
-            with open(outjson,"w") as info_h:
+            with open(outjson, "w") as info_h:
                 json_kwargs = MINIFY_KWARGS if minify else MAXIFY_KWARGS
-                json.dump(info,info_h, cls=EssenceInfoEncoder, **json_kwargs)
+                json.dump(info, info_h, cls=EssenceInfoEncoder, **json_kwargs)
 
         return _SUCCESS
+
 
 class RelicSgaPackCli(CliPluginGroup):
     GROUP = "relic.cli.sga.pack"

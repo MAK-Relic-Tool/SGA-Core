@@ -12,7 +12,7 @@ class EssenceFS(FS, ABC):
     def iterate_fs(self) -> Iterator[Tuple[str, FS]]:
         raise NotImplementedError
 
-    def info_tree(self, **options) -> Dict[str,Any]:
+    def info_tree(self, **options) -> Dict[str, Any]:
         """
         Get a dictionary of the Filesystem tree, containing metadata for files/folders, 'drives' and the root archive
 

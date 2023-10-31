@@ -18,71 +18,71 @@ Hashable = Union[BinaryIO, bytes, bytearray]
 
 class _HasherHashFunc(Protocol[_T]):
     def __call__(
-            self,
-            stream: Hashable,
-            *,
-            start: Optional[int] = None,
-            size: Optional[int] = None,
-            eigen: Optional[_T] = None,
+        self,
+        stream: Hashable,
+        *,
+        start: Optional[int] = None,
+        size: Optional[int] = None,
+        eigen: Optional[_T] = None,
     ):
         raise NotImplementedError
 
 
 class Hasher(Generic[_T]):
     def __init__(
-            self,
-            hasher_name: str,
-            hash_func: _HasherHashFunc,
-            default_err_cls: Type[HashMismatchError[_T]] = HashMismatchError,
+        self,
+        hasher_name: str,
+        hash_func: _HasherHashFunc,
+        default_err_cls: Type[HashMismatchError[_T]] = HashMismatchError,
     ):
         self._hasher_name = hasher_name
         self._default_err_cls = default_err_cls
         self._hash_func = hash_func
-        if not hasattr(self,"__name__"):
+        if not hasattr(self, "__name__"):
             self.__name__ = self._hasher_name
 
     def __call__(
-            self,
-            stream: Hashable,
-            *,
-            start: Optional[int] = None,
-            size: Optional[int] = None,
-            eigen: Optional[_T] = None,
+        self,
+        stream: Hashable,
+        *,
+        start: Optional[int] = None,
+        size: Optional[int] = None,
+        eigen: Optional[_T] = None,
     ):
         return self.hash(stream=stream, start=start, size=size, eigen=eigen)
 
     def hash(
-            self,
-            stream: Hashable,
-            *,
-            start: Optional[int] = None,
-            size: Optional[int] = None,
-            eigen: Optional[bytes] = None,
+        self,
+        stream: Hashable,
+        *,
+        start: Optional[int] = None,
+        size: Optional[int] = None,
+        eigen: Optional[bytes] = None,
     ) -> _T:
         return self._hash_func(stream=stream, start=start, size=size, eigen=eigen)
 
     def check(
-            self,
-            stream: Hashable,
-            expected: _T,
-            *,
-            start: Optional[int] = None,
-            size: Optional[int] = None,
-            eigen: Optional[bytes] = None,
+        self,
+        stream: Hashable,
+        expected: _T,
+        *,
+        start: Optional[int] = None,
+        size: Optional[int] = None,
+        eigen: Optional[bytes] = None,
     ):
         result = self.hash(stream=stream, start=start, size=size, eigen=eigen)
         return result == expected
 
     def validate(
-            self,
-            stream: Hashable,
-            expected: _T,
-            *,
-            start: Optional[int] = None,
-            size: Optional[int] = None,
-            eigen: Optional[bytes] = None,
-            err_cls: Optional[Type[HashMismatchError]] = None,
-            name: Optional[str] = None,
+        self,
+        stream: Hashable,
+        expected: _T,
+        *,
+        start: Optional[int] = None,
+        size: Optional[int] = None,
+        eigen: Optional[bytes] = None,
+        err_cls: Optional[Type[HashMismatchError]] = None,
+        name: Optional[str] = None,
     ):
         result = self.hash(stream=stream, start=start, size=size, eigen=eigen)
         if result != expected:
@@ -95,11 +95,11 @@ class Hasher(Generic[_T]):
 
 
 def _md5(
-        stream: Hashable,
-        *,
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[bytes] = None,
+    stream: Hashable,
+    *,
+    start: Optional[int] = None,
+    size: Optional[int] = None,
+    eigen: Optional[bytes] = None,
 ) -> _T:
     hasher = (
         hashlib.md5(eigen, usedforsecurity=False)
@@ -112,11 +112,11 @@ def _md5(
 
 
 def _crc32(
-        stream: Hashable,
-        *,
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[int] = None,
+    stream: Hashable,
+    *,
+    start: Optional[int] = None,
+    size: Optional[int] = None,
+    eigen: Optional[int] = None,
 ) -> int:
     crc = eigen if eigen is not None else 0
     for chunk in read_chunks(stream, start, size):
@@ -125,11 +125,11 @@ def _crc32(
 
 
 def _sha1(
-        stream: Hashable,
-        *,
-        start: Optional[int] = None,
-        size: Optional[int] = None,
-        eigen: Optional[int] = None,
+    stream: Hashable,
+    *,
+    start: Optional[int] = None,
+    size: Optional[int] = None,
+    eigen: Optional[int] = None,
 ) -> bytes:
     hasher = (
         hashlib.sha1(eigen, usedforsecurity=False)
