@@ -178,6 +178,79 @@ class RelicSgaUnpackCli(CliPlugin):
         return _SUCCESS
 
 
+class EssenceInfoEncoder(JSONEncoder):
+    def default(self, o):
+        if dataclasses.is_dataclass(o):
+            return dataclasses.asdict(o)
+        try:
+            return super().default(o)
+        except TypeError: # Kinda bad; but we don't want to serialize, we want to print; so i think this is an acceptable tradeoff
+            return str(o)
+
+
+
+class RelicSgaInfoCli(CliPlugin):
+    def _create_parser(
+        self, command_group: Optional[_SubParsersAction] = None
+    ) -> ArgumentParser:
+        parser: ArgumentParser
+        desc = """Reads an SGA Archive and extracts it's metadata to a json object.
+            If out_json is a directory; the name of the file will be '[name of sga].json'
+        """
+        if command_group is None:
+            parser = ArgumentParser("info", description=desc)
+        else:
+            parser = command_group.add_parser("info", description=desc)
+
+        parser.add_argument(
+            "src_sga",
+            type=_get_file_type_validator(exists=True),
+            help="Source SGA File",
+        )
+        parser.add_argument(
+            "out_json",
+            type=_get_path_validator(exists=False),
+            help="Output File or Directory",
+        )
+        parser.add_argument(
+            "-m", "--minify",
+            action="store_true",
+            default=False,
+            help="Minifies the resulting json by stripping whitespace, newlines, and indentations. Reduces filesize",
+        )
+
+        return parser
+
+    def command(self, ns: Namespace) -> Optional[int]:
+        infile: str = ns.src_sga
+        outjson: str = ns.out_json
+        minify:bool = ns.minify
+
+        MINIFY_KWARGS = {"separators":(',',':'),'indent':None}
+        MAXIFY_KWARGS = {"separators":(', ', ': '),'indent':4}
+
+        print(f"Reading Info `{infile}`")
+
+        # we need to open the archive to 'isolate' or to determine if we implicit merge
+        sga: EssenceFS
+        with open_fs(infile, default_protocol="sga") as sga:
+            info = sga.info_tree()
+
+            outjson_dir, outjson_file = os.path.split(outjson)
+            if len(outjson_file) == 0:  # Directory
+                # Get name of sga without extension, then add .json extension
+                outjson_dir = outjson
+                outjson_file = os.path.splitext(os.path.split(infile)[1])[0] + ".json"
+
+            os.makedirs(outjson_dir, exist_ok=True)
+            outjson = os.path.join(outjson_dir,outjson_file)
+
+            with open(outjson,"w") as info_h:
+                json_kwargs = MINIFY_KWARGS if minify else MAXIFY_KWARGS
+                json.dump(info,info_h, cls=EssenceInfoEncoder, **json_kwargs)
+
+        return _SUCCESS
+
 class RelicSgaPackCli(CliPluginGroup):
     GROUP = "relic.cli.sga.pack"
 
