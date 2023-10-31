@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import os.path
 from argparse import ArgumentParser, Namespace
+from json import JSONEncoder
 from typing import Optional, Callable
 
 from fs import open_fs
@@ -14,17 +17,6 @@ from relic.sga.core.essencefs import EssenceFS
 
 _SUCCESS = 0
 
-
-class RelicSgaCli(CliPluginGroup):
-    GROUP = "relic.cli.sga"
-
-    def _create_parser(
-        self, command_group: Optional[_SubParsersAction] = None
-    ) -> ArgumentParser:
-        if command_group is None:
-            return ArgumentParser("sga")
-        else:
-            return command_group.add_parser("sga")
 
 
 def _arg_exists_err(value: str) -> argparse.ArgumentTypeError:
@@ -96,6 +88,17 @@ def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
 
     return _file_type
 
+class RelicSgaCli(CliPluginGroup):
+    GROUP = "relic.cli.sga"
+
+    def _create_parser(
+        self, command_group: Optional[_SubParsersAction] = None
+    ) -> ArgumentParser:
+        if command_group is None:
+            return ArgumentParser("sga")
+        else:
+            return command_group.add_parser("sga")
+
 
 class RelicSgaUnpackCli(CliPlugin):
     def _create_parser(
@@ -144,11 +147,10 @@ class RelicSgaUnpackCli(CliPlugin):
         merge: bool = ns.merge
         isolate: bool = ns.isolate
 
-        print(vars(ns))
         print(f"Unpacking `{infile}`")
 
-        def _callback(_1: FS, srcfile: str, _2: FS, _3: str) -> None:
-            print(f"\t\tUnpacking File `{srcfile}`")
+        def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
+            print(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
         if merge:  # we can short circuit the merge flag case
             copy_fs(
@@ -163,6 +165,7 @@ class RelicSgaUnpackCli(CliPlugin):
         sga: EssenceFS
         with open_fs(infile, default_protocol="sga") as sga:
             roots = list(sga.iterate_fs())
+            # Implicit merge; we reuse sga to avoid reopening the filesystem
             if not isolate and len(roots) == 1:
                 copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
                 return _SUCCESS

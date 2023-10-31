@@ -10,13 +10,12 @@ import pytest
 
 class CommandTests:
     def test_run(self, args: Sequence[str], output: str, exit_code: int):
-        _args = ["relic", *args]
-        cmd = subprocess.run(_args, capture_output=True, text=True)
+        cmd = subprocess.run(args, capture_output=True, text=True)
         result = cmd.stdout
         status = cmd.returncode
         print(f"'{result}'")  # Visual Aid for Debugging
-        assert output in result
         assert status == exit_code
+        assert output in result
 
     def test_run_with(self, args: Sequence[str], output: str, exit_code: int):
         from relic.core.cli import CLI
@@ -27,8 +26,8 @@ class CommandTests:
             f.seek(0)
             result = f.read()
             print(f"'{result}'")  # Visual Aid for Debugging
-            assert output in result
             assert status == exit_code
+            assert output in result
 
 
 _SGA_HELP = ["relic","sga", "-h"], """usage: relic sga [-h] {info,pack,unpack} ...""", 0
