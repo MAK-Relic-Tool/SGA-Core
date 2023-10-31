@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import Tuple, Iterator, Any, Dict
+from typing import Iterator, Tuple, Any, Dict
 
 from fs.base import FS
 
@@ -18,8 +18,3 @@ class EssenceFS(FS, ABC):
         :returns: A dictionary representing the file system tree and it's metadata
         """
         raise NotImplementedError
-
-
-__all__ = [
-    "EssenceFS",
-]
