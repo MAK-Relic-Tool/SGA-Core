@@ -11,7 +11,7 @@ from relic.sga.core.errors import (
     Sha1MismatchError,
 )
 
-_T = TypeVar("_T")
+_T = TypeVar("_T",contravariant=True)
 
 Hashable = Union[BinaryIO, bytes, bytearray]
 
@@ -100,7 +100,7 @@ def _md5(
     start: Optional[int] = None,
     size: Optional[int] = None,
     eigen: Optional[bytes] = None,
-) -> _T:
+) -> bytes:
     hasher = (
         hashlib.md5(eigen, usedforsecurity=False)
         if eigen is not None
@@ -129,7 +129,7 @@ def _sha1(
     *,
     start: Optional[int] = None,
     size: Optional[int] = None,
-    eigen: Optional[int] = None,
+    eigen: Optional[bytes] = None,
 ) -> bytes:
     hasher = (
         hashlib.sha1(eigen, usedforsecurity=False)

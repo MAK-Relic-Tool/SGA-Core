@@ -20,9 +20,10 @@ import pkg_resources
 from fs.base import FS
 from fs.opener import Opener
 from fs.opener.parse import ParseResult
+from relic.core.errors import RelicToolError
 from relic.core.lazyio import BinaryWrapper
 
-from relic.sga.core import Version, MagicWord
+from relic.sga.core.definitions import Version, MagicWord
 from relic.sga.core.serialization import _validate_magic_word
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencefs import EssenceFS
@@ -181,7 +182,8 @@ class EssenceFSOpener(Opener):
         # Resolve Path
         if fs_url == "sga://":
             if create:
-                return EssenceFS()
+                raise RelicToolError("Cannot create an SGA from fs.open_fs;"
+                                     " please manually create an empty FS object from an appropriate SGA Plugin.")
             else:
                 raise fs.opener.errors.OpenerError(
                     "No path was given and opener not marked for 'create'!"

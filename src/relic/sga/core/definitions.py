@@ -29,7 +29,7 @@ class Version:
         yield self.major
         yield self.minor
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> int:
         if 0 <= item < 2:
             return self.major if item is 0 else self.minor
         else:

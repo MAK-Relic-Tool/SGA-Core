@@ -84,4 +84,5 @@ __all__ = [
     "Md5MismatchError",
     "Crc32MismatchError",
     "Sha1MismatchError",
+    "MagicMismatchError"
 ]
