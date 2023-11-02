@@ -1,12 +1,18 @@
 import dataclasses
 from dataclasses import dataclass
-from io import BytesIO
-from typing import Optional, Type, Iterable, Tuple, Union, Callable
 from hashlib import md5 as calc_md5, sha1 as calc_sha1
+from io import BytesIO
+from typing import Optional, Type, Iterable, Union, Callable
 from zlib import crc32 as calc_crc32
+
 import pytest
 
-from relic.sga.core.errors import HashMismatchError, Crc32MismatchError, Sha1MismatchError, Md5MismatchError
+from relic.sga.core.errors import (
+    HashMismatchError,
+    Crc32MismatchError,
+    Sha1MismatchError,
+    Md5MismatchError,
+)
 from relic.sga.core.hashtools import Hashable, _T, Hasher, md5, sha1, crc32
 
 
@@ -31,78 +37,88 @@ class HashArgs:
         return dataclasses.asdict(self)
 
 
-
 def _invert_hash(t: Union[bytes, int]):
     if isinstance(t, int):
         return t ^ 0xFFFFFFFF
     return bytes(v ^ 255 for v in t)
 
 
-def _hasher_from_input(items:Iterable[HashArgs], parse_eigen:Callable[[Optional[int]],Optional[Union[int,bytes]]], calc_hash:Callable[[bytes,Union[int,bytes]],Union[bytes,int]], hasher:Hasher, err_cls:Type[HashMismatchError]):
+def _hasher_from_input(
+    items: Iterable[HashArgs],
+    parse_eigen: Callable[[Optional[int]], Optional[Union[int, bytes]]],
+    calc_hash: Callable[[bytes, Union[int, bytes]], Union[bytes, int]],
+    hasher: Hasher,
+    err_cls: Type[HashMismatchError],
+):
     TF = [True, False]
     for args in items:
         buffer: bytes = args.stream
         if args.start is not None:
-            buffer = buffer[args.start:]
+            buffer = buffer[args.start :]
         if args.size is not None:
-            buffer = buffer[:args.size]
+            buffer = buffer[: args.size]
 
         eigen = parse_eigen(args.eigen)
-        calced = calc_hash(buffer,eigen)
+        calced = calc_hash(buffer, eigen)
         for use_bytes in TF:
             for should_pass in TF:
                 expected = _invert_hash(calced) if not should_pass else calced
 
-                hash_args = HashArgs(BytesIO(args.stream) if not use_bytes else args.stream, args.start, args.size, eigen)
+                hash_args = HashArgs(
+                    BytesIO(args.stream) if not use_bytes else args.stream,
+                    args.start,
+                    args.size,
+                    eigen,
+                )
 
                 yield hasher, hash_args, expected, should_pass, err_cls
 
-def _md5_from_input(items:Iterable[HashArgs]):
-    def _eigen(e:Optional[int]) -> Optional[bytes]:
+
+def _md5_from_input(items: Iterable[HashArgs]):
+    def _eigen(e: Optional[int]) -> Optional[bytes]:
         if e is not None:
-            return e.to_bytes(4,"little",signed=False)
+            return e.to_bytes(4, "little", signed=False)
         else:
             return None
-    def _hash(b:bytes, e:Optional[bytes]) -> bytes:
+
+    def _hash(b: bytes, e: Optional[bytes]) -> bytes:
         hasher = calc_md5(usedforsecurity=False)
         if e is not None:
             hasher.update(e)
         hasher.update(b)
         return hasher.digest()
 
-
     yield from _hasher_from_input(items, _eigen, _hash, md5, Md5MismatchError)
 
 
-
-def _sha1_from_input(items:Iterable[HashArgs]):
-    def _eigen(e:Optional[int]) -> Optional[bytes]:
+def _sha1_from_input(items: Iterable[HashArgs]):
+    def _eigen(e: Optional[int]) -> Optional[bytes]:
         if e is not None:
-            return e.to_bytes(4,"little",signed=False)
+            return e.to_bytes(4, "little", signed=False)
         else:
             return None
-    def _hash(b:bytes, e:Optional[bytes]) -> bytes:
+
+    def _hash(b: bytes, e: Optional[bytes]) -> bytes:
         hasher = calc_sha1(usedforsecurity=False)
         if e is not None:
             hasher.update(e)
         hasher.update(b)
         return hasher.digest()
 
-
     yield from _hasher_from_input(items, _eigen, _hash, sha1, Sha1MismatchError)
 
 
-def _crc32_from_input(items:Iterable[HashArgs]):
-    def _eigen(e:Optional[int]) -> Optional[int]:
+def _crc32_from_input(items: Iterable[HashArgs]):
+    def _eigen(e: Optional[int]) -> Optional[int]:
         return e
-    def _hash(b:bytes, e:Optional[int]) -> int:
+
+    def _hash(b: bytes, e: Optional[int]) -> int:
         if e is None:
             return calc_crc32(b)
         else:
-            return calc_crc32(b,e)
+            return calc_crc32(b, e)
 
     yield from _hasher_from_input(items, _eigen, _hash, crc32, Crc32MismatchError)
-
 
 
 def _convert_input_2_tests(items: Iterable[HashArgs]):
@@ -110,7 +126,6 @@ def _convert_input_2_tests(items: Iterable[HashArgs]):
     yield from _md5_from_input(items)
     yield from _sha1_from_input(items)
     yield from _crc32_from_input(items)
-
 
 
 _input_args = [
@@ -121,35 +136,64 @@ _input_args = [
     (HashArgs(b"Eric Andre", eigen=5202012)),
     (HashArgs(b"Fraser, Branden", start=8, eigen=5041999)),
     (HashArgs(b"Gene Simmons", size=4, eigen=2181974)),
-    (HashArgs(b"Hulk Hogan", start=5, size=3, eigen=1012012))
+    (HashArgs(b"Hulk Hogan", start=5, size=3, eigen=1012012)),
 ]
 
 _TEST_DATA = list(_convert_input_2_tests(_input_args))
 
-_HASHER_TESTS = list((hasher,args,buffer) for (hasher,args, buffer, passing, _) in _TEST_DATA if passing)
+_HASHER_TESTS = list(
+    (hasher, args, buffer)
+    for (hasher, args, buffer, passing, _) in _TEST_DATA
+    if passing
+)
 _HASHER_TEST_IDS = list(f"{_[0].__name__} ~ {_[1]} ~ {_[2]}" for _ in _HASHER_TESTS)
 
-_HASHER_CHECK_TESTS = list((hasher,args,buffer, passing) for (hasher,args, buffer, passing, _) in _TEST_DATA)
-_HASHER_CHECK_TEST_IDS = list(f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {'Match' if _[3] else 'MisMatch'}" for _ in _HASHER_CHECK_TESTS)
+_HASHER_CHECK_TESTS = list(
+    (hasher, args, buffer, passing) for (hasher, args, buffer, passing, _) in _TEST_DATA
+)
+_HASHER_CHECK_TEST_IDS = list(
+    f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {'Match' if _[3] else 'MisMatch'}"
+    for _ in _HASHER_CHECK_TESTS
+)
 
-_HASHER_VALIDATE_ERR_TESTS = list((hasher,args,buffer, err_cls) for (hasher,args, buffer, passing, err_cls) in _TEST_DATA if not passing)
-_HASHER_VALIDATE_ERR_IDS = list(f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {_[3]}" for _ in _HASHER_VALIDATE_ERR_TESTS)
+_HASHER_VALIDATE_ERR_TESTS = list(
+    (hasher, args, buffer, err_cls)
+    for (hasher, args, buffer, passing, err_cls) in _TEST_DATA
+    if not passing
+)
+_HASHER_VALIDATE_ERR_IDS = list(
+    f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {_[3]}" for _ in _HASHER_VALIDATE_ERR_TESTS
+)
 
-_HASHER_VALIDATE_ERR_NAME_TESTS = list((hasher,args,buffer, hasher._hasher_name) for (hasher,args, buffer, passing, _) in _TEST_DATA if not passing)
-_HASHER_VALIDATE_ERR_NAME_IDS = list(f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {_[3]}" for _ in _HASHER_VALIDATE_ERR_NAME_TESTS)
+_HASHER_VALIDATE_ERR_NAME_TESTS = list(
+    (hasher, args, buffer, hasher._hasher_name)
+    for (hasher, args, buffer, passing, _) in _TEST_DATA
+    if not passing
+)
+_HASHER_VALIDATE_ERR_NAME_IDS = list(
+    f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {_[3]}"
+    for _ in _HASHER_VALIDATE_ERR_NAME_TESTS
+)
 
 
-
-@pytest.mark.parametrize(["hasher", "args", "expected"], _HASHER_TESTS, ids = _HASHER_TEST_IDS)
+@pytest.mark.parametrize(
+    ["hasher", "args", "expected"], _HASHER_TESTS, ids=_HASHER_TEST_IDS
+)
 def test_hasher_hash(hasher: Hasher, args: HashArgs, expected: _T):
-    if hasattr(args.stream,"seek"):
+    if hasattr(args.stream, "seek"):
         args.stream.seek(0)
     result = hasher.hash(**args.hash_kwargs)
     assert result == expected
 
 
-@pytest.mark.parametrize(["hasher", "args", "expected", "expected_result"], _HASHER_CHECK_TESTS, ids=_HASHER_CHECK_TEST_IDS)
-def test_hasher_check(hasher: Hasher, args: HashArgs, expected: _T, expected_result: bool):
+@pytest.mark.parametrize(
+    ["hasher", "args", "expected", "expected_result"],
+    _HASHER_CHECK_TESTS,
+    ids=_HASHER_CHECK_TEST_IDS,
+)
+def test_hasher_check(
+    hasher: Hasher, args: HashArgs, expected: _T, expected_result: bool
+):
     if hasattr(args.stream, "seek"):
         args.stream.seek(0)
 
@@ -157,8 +201,14 @@ def test_hasher_check(hasher: Hasher, args: HashArgs, expected: _T, expected_res
     assert result == expected_result
 
 
-@pytest.mark.parametrize(["hasher", "args", "expected", "expected_result"], _HASHER_CHECK_TESTS, ids=_HASHER_CHECK_TEST_IDS)
-def test_hasher_validate(hasher: Hasher, args: HashArgs, expected: _T, expected_result: bool):
+@pytest.mark.parametrize(
+    ["hasher", "args", "expected", "expected_result"],
+    _HASHER_CHECK_TESTS,
+    ids=_HASHER_CHECK_TEST_IDS,
+)
+def test_hasher_validate(
+    hasher: Hasher, args: HashArgs, expected: _T, expected_result: bool
+):
     if hasattr(args.stream, "seek"):
         args.stream.seek(0)
 
@@ -170,11 +220,18 @@ def test_hasher_validate(hasher: Hasher, args: HashArgs, expected: _T, expected_
         assert expected_result is True
 
 
-
-@pytest.mark.parametrize(["hasher", "args", "expected_failure", "expected_err_cls"], _HASHER_VALIDATE_ERR_TESTS, ids=_HASHER_VALIDATE_ERR_IDS)
-def test_hasher_validate_err_cls(hasher: Hasher, args: HashArgs, expected_failure: _T,
-                                 expected_err_cls: Type[HashMismatchError]):
-    if hasattr(args.stream,"seek"):
+@pytest.mark.parametrize(
+    ["hasher", "args", "expected_failure", "expected_err_cls"],
+    _HASHER_VALIDATE_ERR_TESTS,
+    ids=_HASHER_VALIDATE_ERR_IDS,
+)
+def test_hasher_validate_err_cls(
+    hasher: Hasher,
+    args: HashArgs,
+    expected_failure: _T,
+    expected_err_cls: Type[HashMismatchError],
+):
+    if hasattr(args.stream, "seek"):
         args.stream.seek(0)
 
     try:
@@ -187,9 +244,15 @@ def test_hasher_validate_err_cls(hasher: Hasher, args: HashArgs, expected_failur
         pytest.fail("Hasher did not raise an error!")
 
 
-@pytest.mark.parametrize(["hasher", "args", "expected_failure", "expected_name"], _HASHER_VALIDATE_ERR_NAME_TESTS, ids=_HASHER_VALIDATE_ERR_NAME_IDS)
-def test_hasher_validate_err_name(hasher: Hasher, args: HashArgs, expected_failure: _T, expected_name: str):
-    if hasattr(args.stream,"seek"):
+@pytest.mark.parametrize(
+    ["hasher", "args", "expected_failure", "expected_name"],
+    _HASHER_VALIDATE_ERR_NAME_TESTS,
+    ids=_HASHER_VALIDATE_ERR_NAME_IDS,
+)
+def test_hasher_validate_err_name(
+    hasher: Hasher, args: HashArgs, expected_failure: _T, expected_name: str
+):
+    if hasattr(args.stream, "seek"):
         args.stream.seek(0)
     try:
         hasher.validate(**args.validate_kwargs, expected=expected_failure)

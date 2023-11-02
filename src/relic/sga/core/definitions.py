@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Tuple, Iterable, Union, List
 
-MagicWord = "_ARCHIVE".encode("ascii")
+MAGIC_WORD = "_ARCHIVE".encode("ascii")
 
 
 @dataclass
@@ -101,4 +101,4 @@ class VerificationType(
     SHA1_BLOCKS = 4  # unknown real values, assuming incremental
 
 
-__all__ = ["MagicWord", "Version", "StorageType", "VerificationType"]
+__all__ = ["MAGIC_WORD", "Version", "StorageType", "VerificationType"]

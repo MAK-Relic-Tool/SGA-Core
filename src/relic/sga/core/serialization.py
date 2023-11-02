@@ -28,7 +28,6 @@ from relic.core.lazyio import (
 )
 
 from relic.sga.core.definitions import Version, StorageType
-from relic.sga.core.errors import MagicMismatchError
 
 _T = TypeVar("_T")
 
@@ -459,7 +458,7 @@ class SgaTocInfoArea(Generic[_TocWindowCls]):
 
     def __get_window(self, index: int) -> _TocWindowCls:
         offset, count = self._info_offset, self._info_count
-        if not (0 <= index < count):
+        if not 0 <= index < count:
             raise IndexError(index, f"Valid indexes are ['{0}', '{count}')")
 
         if index not in self._windows:
@@ -576,7 +575,7 @@ class SgaFile(BinaryProxySerializer):
         raise NotImplementedError
 
 
-def _validate_magic_word(magic: bytes, stream: BinaryIO, advance: bool) -> None:
+def validate_magic_word(magic: bytes, stream: BinaryIO, advance: bool) -> None:
     size = len(magic)
     if not advance:
         with BinaryWindow(
@@ -587,6 +586,10 @@ def _validate_magic_word(magic: bytes, stream: BinaryIO, advance: bool) -> None:
         read_buffer = stream.read(size)
 
     if read_buffer != magic:
+        from relic.sga.core.errors import (
+            MagicMismatchError,
+        )  # I have no idea where the circular dependency is; but this import is the issue
+
         raise MagicMismatchError(read_buffer, magic)
 
 

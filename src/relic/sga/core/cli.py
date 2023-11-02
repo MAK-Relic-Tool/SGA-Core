@@ -13,7 +13,7 @@ from fs.base import FS
 from fs.copy import copy_fs
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin
 
-from relic.sga.core.essencefs import EssenceFS
+from relic.sga.core.essencefs.definitions import EssenceFS
 
 _SUCCESS = 0
 
@@ -250,7 +250,7 @@ class RelicSgaInfoCli(CliPlugin):
             os.makedirs(outjson_dir, exist_ok=True)
             outjson = os.path.join(outjson_dir, outjson_file)
 
-            with open(outjson, "w") as info_h:
+            with open(outjson, "w", encoding=None) as info_h:
                 json_kwargs: Dict[str, Any] = (  # type: ignore
                     self._JSON_MINIFY_KWARGS if minify else self._JSON_MAXIFY_KWARGS
                 )
