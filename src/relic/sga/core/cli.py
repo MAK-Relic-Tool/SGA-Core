@@ -13,7 +13,7 @@ from fs.base import FS
 from fs.copy import copy_fs
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin
 
-from relic.sga.core.essencefs.definitions import EssenceFS
+from relic.sga.core.essencefs import EssenceFS
 
 _SUCCESS = 0
 
