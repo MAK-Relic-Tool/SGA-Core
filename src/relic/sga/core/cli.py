@@ -29,7 +29,7 @@ def _get_path_validator(exists: bool) -> Callable[[str], str]:
         def _step(_path: str) -> None:
             parent, _ = os.path.split(_path)
 
-            if len(parent) != 0:
+            if len(parent) != 0 and parent != _path:
                 return _step(parent)
 
             if not os.path.exists(parent):
