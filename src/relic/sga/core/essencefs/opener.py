@@ -18,14 +18,12 @@ from fs.opener import Opener
 from fs.opener.errors import OpenerError
 from fs.opener.parse import ParseResult
 from relic.core.errors import RelicToolError
-from relic.core.lazyio import BinaryProxy
+from relic.core.lazyio import BinaryProxy, get_proxy
 from relic.core.entrytools import EntrypointRegistry
-from relic.core.lazyio import get_proxy
 
 from relic.sga.core.definitions import Version, MAGIC_WORD
 from relic.sga.core.essencefs.definitions import EssenceFS
 from relic.sga.core.serialization import (
-    validate_magic_word,
     VersionSerializer,
 )
 
@@ -58,12 +56,13 @@ class EssenceFsOpenerPlugin(Protocol[_TEssenceFS]):
 
 
 def _get_version(file: Union[BinaryProxy, BinaryIO], advance=False):
+
     binio = get_proxy(file)
     start = binio.tell()
-    validate_magic_word(MAGIC_WORD, binio, advance=True)
+    MAGIC_WORD.validate(binio, advance=True)
     version = VersionSerializer.read(binio)
     if not advance:
-        binio.seek(start)
+        binio.seek(start,os.SEEK_CUR)
     return version
 
 

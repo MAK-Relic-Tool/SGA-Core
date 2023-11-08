@@ -575,23 +575,6 @@ class SgaFile(BinaryProxySerializer):
         raise NotImplementedError
 
 
-def validate_magic_word(magic: bytes, stream: BinaryIO, advance: bool) -> None:
-    size = len(magic)
-    if not advance:
-        with BinaryWindow(
-            stream, start=stream.tell(), size=size
-        ) as window:  # Use window to cheese 'peek' behaviour
-            read_buffer = window.read()
-    else:
-        read_buffer = stream.read(size)
-
-    if read_buffer != magic:
-        from relic.sga.core.errors import (
-            MagicMismatchError,
-        )  # I have no idea where the circular dependency is; but this import is the issue
-
-        raise MagicMismatchError(read_buffer, magic)
-
 
 class VersionSerializer:
     _INT_SIZE = 2

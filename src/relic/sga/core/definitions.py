@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Tuple, Iterable, Union, List
 
-MAGIC_WORD = "_ARCHIVE".encode("ascii")
+from relic.core.serialization import MagicWord
+
+MAGIC_WORD = MagicWord(b"_ARCHIVE",name="SGA Magic Word")
 
 
 @dataclass
