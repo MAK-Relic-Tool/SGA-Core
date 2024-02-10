@@ -27,3 +27,4 @@ jobs:
     uses: MAK-Relic-Tool/Workflows/.github/workflows/mypy.yml@main
     with:
       package: "relic.sga.core"
+      mypy-config: "pyproject.toml"

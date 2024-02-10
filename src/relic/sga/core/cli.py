@@ -107,7 +107,7 @@ class RelicSgaUnpackCli(CliPlugin):
         parser: ArgumentParser
         desc = """Unpack an SGA archive to the filesystem.
             If only one root is present in the SGA, '--merge' is implied.
-            If multiple roots are in the SGA '--isolate' is implied. 
+            If multiple roots are in the SGA '--isolate' is implied.
             Manually specify the flags to override this behaviour."""
         if command_group is None:
             parser = ArgumentParser("unpack", description=desc)
@@ -194,8 +194,8 @@ class EssenceInfoEncoder(JSONEncoder):
 
 
 class RelicSgaInfoCli(CliPlugin):
-    _JSON_MINIFY_KWARGS = {"separators": (",", ":"), "indent": None}
-    _JSON_MAXIFY_KWARGS = {"separators": (", ", ": "), "indent": 4}
+    _JSON_MINIFY_KWARGS: Dict[str, Any] = {"separators": (",", ":"), "indent": None}
+    _JSON_MAXIFY_KWARGS: Dict[str, Any] = {"separators": (", ", ": "), "indent": 4}
 
     def _create_parser(
         self, command_group: Optional[_SubParsersAction] = None
@@ -251,7 +251,7 @@ class RelicSgaInfoCli(CliPlugin):
             outjson = os.path.join(outjson_dir, outjson_file)
 
             with open(outjson, "w", encoding=None) as info_h:
-                json_kwargs: Dict[str, Any] = (  # type: ignore
+                json_kwargs: Dict[str, Any] = (
                     self._JSON_MINIFY_KWARGS if minify else self._JSON_MAXIFY_KWARGS
                 )
                 json.dump(info, info_h, cls=EssenceInfoEncoder, **json_kwargs)

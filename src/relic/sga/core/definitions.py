@@ -1,6 +1,7 @@
 """
 Definitions expressed concretely in core
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from typing import Any, Tuple, Iterable, Union, List
 
 from relic.core.serialization import MagicWord
 
-MAGIC_WORD = MagicWord(b"_ARCHIVE",name="SGA Magic Word")
+MAGIC_WORD = MagicWord(b"_ARCHIVE", name="SGA Magic Word")
 
 
 @dataclass

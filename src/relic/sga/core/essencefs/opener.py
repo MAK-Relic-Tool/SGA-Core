@@ -11,6 +11,7 @@ from typing import (
     List,
     Iterable,
     Union,
+    Type,
 )
 
 import fs.opener
@@ -32,7 +33,7 @@ _TEssenceFS = TypeVar("_TEssenceFS", bound=EssenceFS)
 
 # Reimplement Opener as a Typed-Protocol # Ugly, but it's my ugly
 #   This should allow it to be used as an opener; or as a plugin-only opener for the EssenceFSOpener
-class EssenceFsOpenerPlugin(Protocol[_TEssenceFS]):
+class EssenceFsOpenerPlugin(Protocol[_TEssenceFS]):  # type: ignore
     @property
     def protocols(self) -> List[str]:
         raise NotImplementedError
@@ -55,32 +56,33 @@ class EssenceFsOpenerPlugin(Protocol[_TEssenceFS]):
         raise NotImplementedError
 
 
-def _get_version(file: Union[BinaryProxy, BinaryIO], advance=False):
-
+def _get_version(file: Union[BinaryProxy, BinaryIO], advance: bool = False) -> Version:
     binio = get_proxy(file)
     start = binio.tell()
     MAGIC_WORD.validate(binio, advance=True)
     version = VersionSerializer.read(binio)
     if not advance:
-        binio.seek(start,os.SEEK_CUR)
+        binio.seek(start, os.SEEK_CUR)
     return version
 
 
-class EssenceFsOpener(EntrypointRegistry[Version, EssenceFsOpenerPlugin], Opener):
+class EssenceFsOpener(
+    EntrypointRegistry[Version, EssenceFsOpenerPlugin[_TEssenceFS]], Opener
+):
     EP_GROUP = "relic.sga.opener"
 
     protocols = ["sga"]
 
     def __init__(
         self,
-        data: Optional[Dict[Version, EssenceFsOpenerPlugin]] = None,
+        # data: Optional[Dict[Version, EssenceFsOpenerPlugin]] = None,
         autoload: bool = True,
     ):
         super().__init__(
             entry_point_path=self.EP_GROUP,
-            key_func=self._version2key,
+            key_func=self._version2key,  # type: ignore # WHY?
             auto_key_func=self._val2keys,
-            data=data,
+            # data=data,
             autoload=autoload,
         )
 
@@ -89,7 +91,7 @@ class EssenceFsOpener(EntrypointRegistry[Version, EssenceFsOpenerPlugin], Opener
         return f"v{version.major}.{version.minor}"
 
     @staticmethod
-    def _value2keys(plugin: EssenceFsOpenerPlugin) -> Iterable[Version]:
+    def _value2keys(plugin: EssenceFsOpenerPlugin[_TEssenceFS]) -> Iterable[Version]:
         yield from plugin.versions
 
     def open_fs(
@@ -117,11 +119,19 @@ class EssenceFsOpener(EntrypointRegistry[Version, EssenceFsOpenerPlugin], Opener
             version = _get_version(
                 peeker, True
             )  # advance is true to avoid unnecessary seek
+        try:
+            opener: Union[Type[EssenceFsOpenerPlugin], EssenceFsOpenerPlugin] = self[version]  # type: ignore
+        except KeyError as e:
+            raise RelicToolError(
+                f"Version {version} not supported! Supported SGA Versions '{list(self.keys())}'."
+            )
 
-        opener = self[version]
-        return opener.open_fs(fs_url, parse_result, writeable, create, cwd)
+        if isinstance(opener, type):
+            opener: EssenceFsOpenerPlugin = opener()  # type: ignore
+
+        return opener.open_fs(fs_url, parse_result, writeable, create, cwd)  # type: ignore
 
 
-registry = EssenceFsOpener()
+registry: EssenceFsOpener[EssenceFS] = EssenceFsOpener()
 
 open_sga = registry.open_fs

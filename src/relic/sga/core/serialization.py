@@ -522,15 +522,15 @@ class SgaToc(BinaryProxySerializer):
         raise NotImplementedError
 
     @property
-    def drives(self) -> SgaTocInfoArea[SgaTocDrive]:
+    def drives(self) -> SgaTocInfoArea[SgaTocDrive]:  # type: ignore
         raise NotImplementedError
 
     @property
-    def folders(self) -> SgaTocInfoArea[SgaTocFolder]:
+    def folders(self) -> SgaTocInfoArea[SgaTocFolder]:  # type: ignore
         raise NotImplementedError
 
     @property
-    def files(self) -> SgaTocInfoArea[SgaTocFile]:
+    def files(self) -> SgaTocInfoArea[SgaTocFile]:  # type: ignore
         raise NotImplementedError
 
     @property
@@ -573,7 +573,6 @@ class SgaFile(BinaryProxySerializer):
     @property
     def data_block(self) -> BinaryWindow:
         raise NotImplementedError
-
 
 
 class VersionSerializer:

@@ -1,6 +1,7 @@
 """
 Error definitions for the SGA API
 """
+
 from typing import List, Optional, Generic, TypeVar
 
 from relic.core.errors import MismatchError, RelicToolError
@@ -62,12 +63,10 @@ class HashMismatchError(MismatchError[_T], Generic[_T]):
     """
 
 
-class Md5MismatchError(HashMismatchError[bytes]):
-    ...
+class Md5MismatchError(HashMismatchError[bytes]): ...
 
 
-class Crc32MismatchError(HashMismatchError[int]):
-    ...
+class Crc32MismatchError(HashMismatchError[int]): ...
 
 
 class Sha1MismatchError(HashMismatchError[bytes]):  #
