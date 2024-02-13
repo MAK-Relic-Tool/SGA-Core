@@ -15,6 +15,7 @@ from typing import (
     TypeVar,
     Dict,
     Literal,
+    Iterator,
 )
 
 from relic.core.errors import RelicToolError
@@ -486,7 +487,7 @@ class SgaTocInfoArea(Generic[_TocWindowCls]):
     def __len__(self) -> int:
         return self._info_count
 
-    def __iter__(self) -> Iterable[_TocWindowCls]:
+    def __iter__(self) -> Iterator[_TocWindowCls]:
         for index in range(self._info_count):
             yield self[index]  # type: ignore
 
