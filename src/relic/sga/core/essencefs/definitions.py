@@ -11,8 +11,8 @@ class EssenceFS(FS, ABC):
         raise NotImplementedError
 
     def info_tree(self, **options: Any) -> Dict[str, Any]:
-        """
-        Get a dictionary of the Filesystem tree, containing metadata for files/folders, 'drives' and the root archive
+        """Get a dictionary of the Filesystem tree, containing metadata for
+        files/folders, 'drives' and the root archive.
 
         :rtype: Dict[str,Any]
         :returns: A dictionary representing the file system tree and it's metadata

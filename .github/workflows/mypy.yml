@@ -4,27 +4,27 @@ on:
   workflow_dispatch:
 
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'src/relic/**'
-      - '.github/workflows/mypy.yml'
-      - 'mypy.ini'
-      - 'setup.cfg'
-      - 'setup.py'
-      - 'MANIFEST.in'
+    - src/relic/**
+    - .github/workflows/mypy.yml
+    - mypy.ini
+    - setup.cfg
+    - setup.py
+    - MANIFEST.in
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'src/relic/**'
-      - '.github/workflows/mypy.yml'
-      - 'mypy.ini'
-      - 'setup.cfg'
-      - 'setup.py'
-      - 'MANIFEST.in'
+    - src/relic/**
+    - .github/workflows/mypy.yml
+    - mypy.ini
+    - setup.cfg
+    - setup.py
+    - MANIFEST.in
 
 jobs:
   mypy:
     uses: MAK-Relic-Tool/Workflows/.github/workflows/mypy.yml@main
     with:
-      package: "relic.sga.core"
-      mypy-config: "pyproject.toml"
+      package: relic.sga.core
+      mypy-config: pyproject.toml

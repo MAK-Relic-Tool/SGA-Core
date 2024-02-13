@@ -1,6 +1,4 @@
-"""
-Definitions expressed concretely in core
-"""
+"""Definitions expressed concretely in core."""
 
 from __future__ import annotations
 
@@ -80,9 +78,8 @@ class Version:
 
 
 class StorageType(int, Enum):
-    """
-    Specifies whether data is stored as a 'raw blob' or as a 'zlib compressed blob'
-    """
+    """Specifies whether data is stored as a 'raw blob' or as a 'zlib compressed
+    blob'."""
 
     # According to modpackager
     STORE = 0
@@ -93,9 +90,7 @@ class StorageType(int, Enum):
 class VerificationType(
     int, Enum
 ):  # TODO; consider not sharing this; this is format specific and wasn't introduced until V4? It could be reimplemented in each version; since each version may have different values
-    """
-    A 'Flag' used to specify how the data's Redundancy Check is stored.
-    """
+    """A 'Flag' used to specify how the data's Redundancy Check is stored."""
 
     NONE = 0  # unknown real values, assuming incremental
     CRC = 1  # unknown real values, assuming incremental

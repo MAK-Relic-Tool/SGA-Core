@@ -1,6 +1,4 @@
-"""
-Error definitions for the SGA API
-"""
+"""Error definitions for the SGA API."""
 
 from typing import List, Optional, Generic, TypeVar
 
@@ -11,18 +9,14 @@ _T = TypeVar("_T")
 
 
 class MagicMismatchError(MismatchError[bytes]):
-    """
-    The archive did not specify the correct magic word
-    """
+    """The archive did not specify the correct magic word."""
 
     def __init__(self, received: Optional[bytes], expected: Optional[bytes] = None):
         super().__init__("Magic Word", received, expected)
 
 
 class VersionMismatchError(MismatchError[Version]):
-    """
-    A version did not match the version expected.
-    """
+    """A version did not match the version expected."""
 
     def __init__(
         self, received: Optional[Version] = None, expected: Optional[Version] = None
@@ -31,9 +25,7 @@ class VersionMismatchError(MismatchError[Version]):
 
 
 class VersionNotSupportedError(RelicToolError):
-    """
-    An unknown version was provided.
-    """
+    """An unknown version was provided."""
 
     def __init__(self, received: Version, allowed: List[Version]):
         super().__init__()
@@ -49,18 +41,14 @@ class VersionNotSupportedError(RelicToolError):
 
 
 class DecompressedSizeMismatch(MismatchError[int]):
-    """
-    A file was decompressed, but did not pass the redundancy check.
-    """
+    """A file was decompressed, but did not pass the redundancy check."""
 
     def __init__(self, received: Optional[int] = None, expected: Optional[int] = None):
         super().__init__("Decompressed Size", received, expected)
 
 
 class HashMismatchError(MismatchError[_T], Generic[_T]):
-    """
-    A sentinel class for catching all hash mismatch errors.
-    """
+    """A sentinel class for catching all hash mismatch errors."""
 
 
 class Md5MismatchError(HashMismatchError[bytes]): ...
