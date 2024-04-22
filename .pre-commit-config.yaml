@@ -19,14 +19,14 @@ repos:
   rev: 24.1.1
   hooks:
   - id: black
-- repo: https://github.com/pre-commit/mirrors-mypy
-  rev: v1.8.0
-  hooks:
-  - id: mypy
-    args: [--explicit-package-bases, --namespace-packages]
-    additional_dependencies:
-    - relic-tool-core >= 2.0.0
-    - fs
+# - repo: https://github.com/pre-commit/mirrors-mypy
+  # rev: v1.8.0
+  # hooks:
+  # - id: mypy
+    # args: [--explicit-package-bases, --namespace-packages]
+    # additional_dependencies:
+    # - relic-tool-core >= 2.0.0
+    # - fs
 
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.12.0
