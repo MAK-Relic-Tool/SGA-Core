@@ -41,7 +41,7 @@ class VersionNotSupportedError(RelicToolError):
 
 
 class DecompressedSizeMismatch(MismatchError[int]):
-    """A file was decompressed, but did not pass the redundancy check."""
+    """A file was decompressed, but did not match the expected size."""
 
     def __init__(self, received: Optional[int] = None, expected: Optional[int] = None):
         super().__init__("Decompressed Size", received, expected)
