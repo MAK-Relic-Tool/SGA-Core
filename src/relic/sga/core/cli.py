@@ -11,7 +11,7 @@ from typing import Optional, Callable, Any, Dict
 from fs import open_fs
 from fs.base import FS
 from fs.copy import copy_fs
-from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin
+from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin, RelicArgParser
 
 from relic.sga.core.essencefs import EssenceFS
 
@@ -96,7 +96,7 @@ class RelicSgaCli(CliPluginGroup):
     ) -> ArgumentParser:
         name = "sga"
         if command_group is None:
-            return ArgumentParser(name)
+            return RelicArgParser(name)
         return command_group.add_parser(name)
 
 
@@ -110,7 +110,7 @@ class RelicSgaUnpackCli(CliPlugin):
             If multiple roots are in the SGA '--isolate' is implied.
             Manually specify the flags to override this behaviour."""
         if command_group is None:
-            parser = ArgumentParser("unpack", description=desc)
+            parser = RelicArgParser("unpack", description=desc)
         else:
             parser = command_group.add_parser("unpack", description=desc)
 
@@ -205,7 +205,7 @@ class RelicSgaInfoCli(CliPlugin):
             If out_json is a directory; the name of the file will be '[name of sga].json'
         """
         if command_group is None:
-            parser = ArgumentParser("info", description=desc)
+            parser = RelicArgParser("info", description=desc)
         else:
             parser = command_group.add_parser("info", description=desc)
 
@@ -267,8 +267,23 @@ class RelicSgaPackCli(CliPluginGroup):
     ) -> ArgumentParser:
         parser: ArgumentParser
         if command_group is None:
-            parser = ArgumentParser("pack")
+            parser = RelicArgParser("pack")
         else:
             parser = command_group.add_parser("pack")
+
+        return parser
+
+
+class RelicSgaRepackCli(CliPluginGroup):
+    GROUP = "relic.cli.sga.repack"
+
+    def _create_parser(
+        self, command_group: Optional[_SubParsersAction] = None
+    ) -> ArgumentParser:
+        parser: ArgumentParser
+        if command_group is None:
+            parser = RelicArgParser("repack")
+        else:
+            parser = command_group.add_parser("repack")
 
         return parser

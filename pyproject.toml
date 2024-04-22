@@ -29,6 +29,7 @@ sga = "relic.sga.core.essencefs.opener:EssenceFsOpener"
 [project.entry-points."relic.cli.sga"]
 info = "relic.sga.core.cli:RelicSgaInfoCli"
 pack = "relic.sga.core.cli:RelicSgaPackCli"
+repack = "relic.sga.core.cli:RelicSgaRepackCli"
 unpack = "relic.sga.core.cli:RelicSgaUnpackCli"
 
 [project.readme]
