@@ -6,13 +6,13 @@ on:
   push:
     branches: [ main, staging ]
     paths:
-      - 'src/relic/**'
-      - '.github/workflows/black.yml'
+    - src/relic/**
+    - .github/workflows/black.yml
   pull_request:
     branches: [ main, staging ]
     paths:
-      - 'src/relic/**'
-      - '.github/workflows/black.yml'
+    - src/relic/**
+    - .github/workflows/black.yml
 
 jobs:
   black:
