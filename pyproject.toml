@@ -9,11 +9,14 @@ classifiers = [
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)"
 ]
 dependencies = [
-  "relic-tool-core >= 2.0.0",
-  "fs"
+  "relic-tool-core >= 2.2.1",
+  "fs >= 2.4.16"
 ]
 description = "Core files shared by versioned SGA files."
 dynamic = ["version"]
@@ -28,9 +31,10 @@ sga = "relic.sga.core.essencefs.opener:EssenceFsOpener"
 
 [project.entry-points."relic.cli.sga"]
 info = "relic.sga.core.cli:RelicSgaInfoCli"
-pack = "relic.sga.core.cli:RelicSgaPackCli"
-repack = "relic.sga.core.cli:RelicSgaRepackCli"
+list = "relic.sga.core.cli:RelicSgaListCli"
+tree = "relic.sga.core.cli:RelicSgaTreeCli"
 unpack = "relic.sga.core.cli:RelicSgaUnpackCli"
+version = "relic.sga.core.cli:RelicSgaVersionCli"
 
 [project.readme]
 content-type = "text/markdown"

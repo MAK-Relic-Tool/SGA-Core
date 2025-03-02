@@ -3,17 +3,24 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import logging
 import os.path
 from argparse import ArgumentParser, Namespace
+from io import StringIO
 from json import JSONEncoder
+from logging import Logger
 from typing import Optional, Callable, Any, Dict
 
+import relic.core.cli
 from fs import open_fs
 from fs.base import FS
 from fs.copy import copy_fs
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin, RelicArgParser
 
+from relic.sga.core.definitions import MAGIC_WORD
 from relic.sga.core.essencefs import EssenceFS
+from relic.sga.core.essencefs.opener import registry as sga_registry
+from relic.sga.core.serialization import VersionSerializer
 
 _SUCCESS = 0
 
@@ -141,16 +148,21 @@ class RelicSgaUnpackCli(CliPlugin):
 
         return parser
 
-    def command(self, ns: Namespace) -> Optional[int]:
+    def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
         infile: str = ns.src_sga
         outdir: str = ns.out_dir
         merge: bool = ns.merge
         isolate: bool = ns.isolate
 
-        print(f"Unpacking `{infile}`")
+        if merge and isolate:
+            raise relic.core.cli.RelicArgParserError(
+                "Isolate and Merge flags are mutually exclusive"
+            )
+
+        logger.info(f"Unpacking `{infile}`")
 
         def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
-            print(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
+            logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
         if merge:  # we can short circuit the merge flag case
             copy_fs(
@@ -184,12 +196,12 @@ class RelicSgaUnpackCli(CliPlugin):
 class EssenceInfoEncoder(JSONEncoder):
     def default(self, o: Any) -> Any:
         if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
+            return dataclasses.asdict(o)  # type: ignore
         try:
             return super().default(o)
         except (
             TypeError
-        ):  # Kinda bad; but we don't want to serialize, we want to print; so i think this is an acceptable tradeoff
+        ):  # Kinda bad; but we don't want to serialize, we want to logger.info; so i think this is an acceptable tradeoff
             return str(o)
 
 
@@ -229,12 +241,12 @@ class RelicSgaInfoCli(CliPlugin):
 
         return parser
 
-    def command(self, ns: Namespace) -> Optional[int]:
+    def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
         infile: str = ns.src_sga
         outjson: str = ns.out_json
         minify: bool = ns.minify
 
-        print(f"Reading Info `{infile}`")
+        logger.info(f"Reading Info `{infile}`")
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
@@ -259,31 +271,92 @@ class RelicSgaInfoCli(CliPlugin):
         return _SUCCESS
 
 
-class RelicSgaPackCli(CliPluginGroup):
-    GROUP = "relic.cli.sga.pack"
+class RelicSgaTreeCli(CliPlugin):
+    def _create_parser(
+        self, command_group: Optional[_SubParsersAction] = None
+    ) -> ArgumentParser:
+        parser: ArgumentParser
+        desc = """Reads an SGA Archive and prints it's hierarchy"""
+        if command_group is None:
+            parser = RelicArgParser("tree", description=desc)
+        else:
+            parser = command_group.add_parser("tree", description=desc)
 
+        parser.add_argument(
+            "sga",
+            type=_get_file_type_validator(exists=True),
+            help="SGA File",
+        )
+
+        return parser
+
+    def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
+        infile: str = ns.src_sga
+
+        logger.info(f"Printing Tree `{infile}`")
+
+        # we need to open the archive to 'isolate' or to determine if we implicit merge
+        sga: EssenceFS
+        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
+            with StringIO() as writer:
+                sga.tree(file=writer, with_color=True, dirs_first=True)
+                writer.seek(0)
+                logger.info(writer.read())
+        return None
+
+
+class RelicSgaVersionCli(CliPlugin):
     def _create_parser(
         self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
         parser: ArgumentParser
         if command_group is None:
-            parser = RelicArgParser("pack")
+            parser = RelicArgParser("version")
         else:
-            parser = command_group.add_parser("pack")
+            parser = command_group.add_parser("version")
+
+        parser.add_argument(
+            "sga",
+            type=_get_file_type_validator(exists=True),
+            help="SGA File",
+        )
 
         return parser
 
+    def command(self, ns: Namespace, *, logger: logging.Logger) -> Optional[int]:
+        sga_file: str = ns.sga
+        logger.info("Sga Version")
+        try:
+            with open(sga_file, "rb") as sga:
+                if not MAGIC_WORD.check(sga, advance=True):
+                    logger.warning("File is not an SGA")
+                else:
+                    version = VersionSerializer.read(sga)
+                    logger.info(version)
+        except IOError:
+            logger.error("Error reading file")
+            raise
+        return None
 
-class RelicSgaRepackCli(CliPluginGroup):
-    GROUP = "relic.cli.sga.repack"
 
+class RelicSgaListCli(CliPlugin):
     def _create_parser(
         self, command_group: Optional[_SubParsersAction] = None
     ) -> ArgumentParser:
         parser: ArgumentParser
         if command_group is None:
-            parser = RelicArgParser("repack")
+            parser = RelicArgParser("list")
         else:
-            parser = command_group.add_parser("repack")
+            parser = command_group.add_parser("list")
 
         return parser
+
+    def command(self, ns: Namespace, *, logger: logging.Logger) -> Optional[int]:
+        logger.info("Installed SGA Plugins")
+        keys = list(sga_registry)
+        for key in keys:
+            logger.info(key)
+        if len(keys) == 0:
+            logger.info("No Plugins Found!")
+
+        return None

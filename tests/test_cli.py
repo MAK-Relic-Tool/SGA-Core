@@ -32,12 +32,10 @@ class CommandTests:
 
 _SGA_HELP = (
     ["relic", "sga", "-h"],
-    """usage: relic sga [-h] {info,pack,unpack} ...""",
-    0,
-)
-_SGA_PACK_HELP = (
-    ["relic", "sga", "pack", "-h"],
-    """usage: relic sga pack [-h] {} ...""",
+    """usage: relic sga [-h] [--log [LOG]]
+                 [--loglevel [{none,debug,info,warning,error,critical}]]
+                 [--logconfig [LOGCONFIG]]
+                 {info,list,tree,unpack,version}""",
     0,
 )
 _SGA_UNPACK_HELP = (
@@ -47,7 +45,7 @@ _SGA_UNPACK_HELP = (
 )
 _SGA_INFO_HELP = ["relic", "sga", "info", "-h"], """usage: relic sga info [-h]""", 0
 
-_TESTS = [_SGA_HELP, _SGA_PACK_HELP, _SGA_UNPACK_HELP, _SGA_INFO_HELP]
+_TESTS = [_SGA_HELP, _SGA_UNPACK_HELP, _SGA_INFO_HELP]
 _TEST_IDS = [" ".join(_[0]) for _ in _TESTS]
 
 
