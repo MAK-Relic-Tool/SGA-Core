@@ -15,7 +15,7 @@ classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)"
 ]
 dependencies = [
-  "relic-tool-core >= 2.2.1",
+  "relic-tool-core >= 2.3.0",
   "fs >= 2.4.16"
 ]
 description = "Core files shared by versioned SGA files."
