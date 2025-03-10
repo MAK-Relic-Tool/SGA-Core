@@ -294,7 +294,7 @@ class RelicSgaTreeCli(CliPlugin):
     def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
         infile: str = ns.src_sga
 
-        logger.info(BracketMessage("Printing Tree `{0}`", infile))
+        logger.info(BraceMessage("Printing Tree `{0}`", infile))
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
