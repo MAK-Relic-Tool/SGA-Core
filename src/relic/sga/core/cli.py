@@ -21,6 +21,7 @@ from relic.sga.core.definitions import MAGIC_WORD
 from relic.sga.core.essencefs import EssenceFS
 from relic.sga.core.essencefs.opener import registry as sga_registry
 from relic.sga.core.serialization import VersionSerializer
+from relic.core.logmsg import BraceMessage
 
 _SUCCESS = 0
 
@@ -293,7 +294,7 @@ class RelicSgaTreeCli(CliPlugin):
     def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
         infile: str = ns.src_sga
 
-        logger.info(f"Printing Tree `{infile}`")
+        logger.info(BraceMessage("Printing Tree `{0}`", infile))
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
