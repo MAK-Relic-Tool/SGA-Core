@@ -7,4 +7,4 @@ from relic.sga.core.definitions import (
     VerificationType,
 )
 
-__version__ = "2.0.1"
+__version__ = "2.0.3"
