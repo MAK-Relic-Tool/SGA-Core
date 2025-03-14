@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import total_ordering
 from enum import Enum
 from typing import Any, Tuple, Iterable, Union, List
 
@@ -12,6 +13,7 @@ MAGIC_WORD = MagicWord(b"_ARCHIVE", name="SGA Magic Word")
 
 
 @dataclass
+@total_ordering
 class Version:
     """A Version object.
 
@@ -44,31 +46,8 @@ class Version:
             other.as_tuple() if isinstance(other, Version) else other
         )
 
-    def __ne__(self, other: object) -> bool:
-        return self.as_tuple() != (
-            other.as_tuple() if isinstance(other, Version) else other
-        )
-
     def __lt__(self, other: Any) -> bool:
         cmp: bool = self.as_tuple() < (
-            other.as_tuple() if isinstance(other, Version) else other
-        )
-        return cmp
-
-    def __gt__(self, other: Any) -> bool:
-        cmp: bool = self.as_tuple() > (
-            other.as_tuple() if isinstance(other, Version) else other
-        )
-        return cmp
-
-    def __le__(self, other: Any) -> bool:
-        cmp: bool = self.as_tuple() <= (
-            other.as_tuple() if isinstance(other, Version) else other
-        )
-        return cmp
-
-    def __ge__(self, other: Any) -> bool:
-        cmp: bool = self.as_tuple() >= (
             other.as_tuple() if isinstance(other, Version) else other
         )
         return cmp

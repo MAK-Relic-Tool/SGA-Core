@@ -5,6 +5,9 @@ __pycache__/
 # Ignore Pycharm
 .idea/
 
+# Ignore vscode 
+.vscode/
+
 #Ignore pytest
 .pytest_cache/
 

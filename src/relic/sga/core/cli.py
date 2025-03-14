@@ -284,7 +284,7 @@ class RelicSgaTreeCli(CliPlugin):
             parser = command_group.add_parser("tree", description=desc)
 
         parser.add_argument(
-            "sga",
+            "src_sga",
             type=_get_file_type_validator(exists=True),
             help="SGA File",
         )
