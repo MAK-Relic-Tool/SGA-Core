@@ -27,7 +27,7 @@ requires-python = ">=3.9"
 "relic.cli" = {sga = "relic.sga.core.cli:RelicSgaCli"}
 
 [project.entry-points."fs.opener"]
-sga = "relic.sga.core.essencefs.opener:EssenceFsOpener"
+sga = "relic.sga.core.essencefs.opener:_EssenceFsOpenerAdapter"
 
 [project.entry-points."relic.cli.sga"]
 info = "relic.sga.core.cli:RelicSgaInfoCli"

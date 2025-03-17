@@ -134,4 +134,25 @@ class EssenceFsOpener(
 
 registry: EssenceFsOpener[EssenceFS] = EssenceFsOpener()
 
+
+class _EssenceFsOpenerAdapter(Opener):
+    """
+    An adapter allowing PyFileSystem to use the EssenceFS Registry
+
+    Required for PyFilesystem to use non-entrypoint plugins
+    (I.E. Plugins registered manually)
+
+    PyFileSystem expects a subclass of Opener, not an instance of Opener
+    This adapter allows PyFileSystem to create a new opener, while using the global opener instance under the hood
+    """
+
+    @classmethod
+    @property
+    def protocols(cls) -> List[str]:
+        return registry.protocols
+
+    def open_fs(self, fs_url, parse_result, writeable, create, cwd):
+        return registry.open_fs(fs_url, parse_result, writeable, create, cwd)
+
+
 open_sga = registry.open_fs
