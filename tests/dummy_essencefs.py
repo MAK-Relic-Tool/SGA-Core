@@ -1,5 +1,5 @@
 import random
-from typing import Iterator, Tuple, List, BinaryIO
+from typing import Iterator, Tuple, List, BinaryIO, Any, Dict
 
 import fs.opener.registry
 from fs import open_fs
@@ -17,6 +17,11 @@ class RandomEssenceFS(EssenceFS, MemoryFS):
 
     def iterate_fs(self) -> Iterator[Tuple[str, FS]]:
         yield ("dummy", self)
+
+    def info_tree(self, **options: Any) -> Dict[str, Any]:
+        return {
+            "dummy": "I want to deprecate this, what was it supposed to accomplish?"
+        }
 
     @classmethod
     def generate_random_fs(cls, seed: int):

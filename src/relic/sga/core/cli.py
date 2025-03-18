@@ -150,7 +150,8 @@ class RelicSgaUnpackCli(CliPlugin):
         merge: bool = ns.merge
         isolate: bool = ns.isolate
 
-        if merge and isolate:
+        if merge and isolate:  # pragma: nocover
+            # This error should be impossible
             raise relic.core.cli.RelicArgParserError(
                 "Isolate and Merge flags are mutually exclusive"
             )
@@ -160,21 +161,12 @@ class RelicSgaUnpackCli(CliPlugin):
         def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
             logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
-        if merge:  # we can short circuit the merge flag case
-            copy_fs(
-                f"sga://{infile}",
-                f"osfs://{outdir}",
-                on_copy=_callback,
-                preserve_time=True,
-            )
-            return _SUCCESS
-
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
         with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
             roots = list(sga.iterate_fs())
-            # Implicit merge; we reuse sga to avoid reopening the filesystem
-            if not isolate and len(roots) == 1:
+            # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
+            if merge or (not isolate and len(roots) == 1):
                 copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
                 return _SUCCESS
 
@@ -250,7 +242,9 @@ class RelicSgaInfoCli(CliPlugin):
             info = sga.info_tree()
 
             outjson_dir, outjson_file = os.path.split(outjson)
-            if len(outjson_file) == 0:  # Directory
+            if len(outjson_file) == 0 or (
+                os.path.exists(outjson) and os.path.isdir(outjson)
+            ):  # Directory
                 # Get name of sga without extension, then add .json extension
                 outjson_dir = outjson
                 outjson_file = os.path.splitext(os.path.split(infile)[1])[0] + ".json"

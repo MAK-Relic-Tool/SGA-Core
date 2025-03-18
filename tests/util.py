@@ -1,10 +1,11 @@
 import os
 import tempfile
+from typing import Optional
 
 
 class TempFileHandle:
-    def __init__(self):
-        with tempfile.NamedTemporaryFile("x", delete=False) as h:
+    def __init__(self, suffix: Optional[str] = None):
+        with tempfile.NamedTemporaryFile("x", delete=False, suffix=suffix) as h:
             self._filename = h.name
 
     @property

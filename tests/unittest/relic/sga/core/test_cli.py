@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import logging
 import os
 import random
@@ -22,6 +23,7 @@ from relic.sga.core.cli import (
     RelicSgaTreeCli,
     RelicSgaVersionCli,
     RelicSgaListCli,
+    EssenceInfoEncoder,
 )
 from relic.sga.core.serialization import VersionSerializer
 from tests.dummy_essencefs import write_random_essencefs, register_randomfs_opener
@@ -147,7 +149,7 @@ def test_cli_tree(seed: int):
         logger = logging.getLogger()
 
         register_randomfs_opener()
-        with TempFileHandle() as h:
+        with TempFileHandle(".sga") as h:
             with h.open("wb") as w:
                 write_random_essencefs(w, seed)
             CLI.run_with("relic", "sga", "tree", h.path, logger=logger)
@@ -189,7 +191,7 @@ def test_cli_version(version: Version, write_magic: bool):
         )
         logger = logging.getLogger()
 
-        with TempFileHandle() as h:
+        with TempFileHandle(".sga") as h:
             with h.open("wb") as w:
                 if write_magic:
                     MAGIC_WORD.write(w)
@@ -209,16 +211,18 @@ def test_cli_version(version: Version, write_magic: bool):
 @pytest.mark.parametrize("seed", SEEDS)
 @pytest.mark.parametrize("merge_flag", [None, "-m", "--merge", "-i", "--isolate"])
 def test_cli_unpack(seed: int, merge_flag: Optional[str]):
+    # Only tests that it runs, does not verify output
+    # TODO Verify Output
     register_randomfs_opener()
     with StringIO() as logFile:
         logging.basicConfig(
             stream=logFile, level=logging.DEBUG, format="%(message)s", force=True
         )
         logger = logging.getLogger()
-        with TempFileHandle() as h:
+        with TempFileHandle(".sga") as h:
             with h.open("wb") as w:
                 write_random_essencefs(w, seed)
-            with TemporaryDirectory() as d:
+            with TemporaryDirectory(suffix="-dir") as d:
                 args = ["relic", "sga", "unpack", h.path, d]
                 if merge_flag is not None:
                     args.append(merge_flag)
@@ -226,3 +230,68 @@ def test_cli_unpack(seed: int, merge_flag: Optional[str]):
                 CLI.run_with(*args, logger=logger)
                 print("\nLOG:")
                 print(logFile.getvalue())
+
+
+@pytest.mark.parametrize("seed", SEEDS[:2])
+@pytest.mark.parametrize("flag", [None, "-m", "--minify"])
+@pytest.mark.parametrize("output_is_dir", [True, False])
+def test_cli_tree_info(seed: int, flag: Optional[str], output_is_dir: bool):
+    # Only tests that it runs, does not verify output
+    # TODO Verify Output
+    register_randomfs_opener()
+    with StringIO() as logFile:
+        logging.basicConfig(
+            stream=logFile, level=logging.DEBUG, format="%(message)s", force=True
+        )
+        logger = logging.getLogger()
+        with TempFileHandle(".sga") as hw:
+            with hw.open("wb") as w:
+                write_random_essencefs(w, seed)
+            with (
+                TempFileHandle(".json")
+                if not output_is_dir
+                else TemporaryDirectory("-dir")
+            ) as hr:
+                hr_path = hr.path if isinstance(hr, TempFileHandle) else hr
+                args = ["relic", "sga", "info", hw.path, hr_path]
+                if flag is not None:
+                    args.append(flag)
+                CLI.run_with(*args, logger=logger)
+                print("\nLOG:")
+                print(logFile.getvalue())
+
+
+def test_info_encoder_dclass():
+    enc = EssenceInfoEncoder()
+
+    @dataclasses.dataclass
+    class Foo:
+        bar: int = 1
+
+    inst = Foo()
+    expected = dataclasses.asdict(inst)
+    result = enc.default(inst)
+    assert result == expected
+
+
+def test_info_encoder_type_error():
+    enc = EssenceInfoEncoder()
+
+    class Foo:
+        bar: int = 1
+
+    inst = Foo()
+    try:
+        result = enc.default(inst)
+        expected = str(inst)
+        assert result == expected
+    except TypeError:
+        pytest.fail("Expected the TypeError to be handled")
+
+
+def test_info_encoder_nondclass():
+    enc = EssenceInfoEncoder()
+    inst = 1
+    result = enc.default(inst)
+    expected = str(inst)
+    assert result == expected
