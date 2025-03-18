@@ -89,6 +89,10 @@ class RandomEssenceFsOpener(EssenceFsOpenerPlugin):
         buffer = seed.to_bytes(4, "little", signed=False)
         handle.write(buffer)
 
+    @property
+    def versions(self) -> List[Version]:
+        return []
+
 
 RAND_SGAFS_VER = Version(0, 0)
 

@@ -63,7 +63,7 @@ def _get_version(file: Union[BinaryProxy, BinaryIO], advance: bool = False) -> V
     MAGIC_WORD.validate(binio, advance=True)
     version = VersionSerializer.read(binio)
     if not advance:
-        binio.seek(start, os.SEEK_CUR)
+        binio.seek(start, os.SEEK_SET)
     return version
 
 
