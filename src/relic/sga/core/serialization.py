@@ -11,7 +11,6 @@ from typing import (
     List,
     Protocol,
     Union,
-    Iterable,
     TypeVar,
     Dict,
     Literal,
@@ -128,14 +127,37 @@ class SgaTocHeader(BinaryProxySerializer):
             self.offset = pos
             self.count = count
 
-    def __init__(self, parent: BinaryIO):
+    # Non-breaking change to init; old-style class-var init still works
+    def __init__(
+        self,
+        parent: BinaryIO,
+        drive_pos_ptr: Optional[Tuple[int, int]] = None,
+        drive_count_ptr: Optional[Tuple[int, int]] = None,
+        folder_pos_ptr: Optional[Tuple[int, int]] = None,
+        folder_count_ptr: Optional[Tuple[int, int]] = None,
+        file_pos_ptr: Optional[Tuple[int, int]] = None,
+        file_count_ptr: Optional[Tuple[int, int]] = None,
+        name_pos_ptr: Optional[Tuple[int, int]] = None,
+        name_count_ptr: Optional[Tuple[int, int]] = None,
+    ):
         super().__init__(
             parent,
         )
-        self._drive = self.TablePointer(self, self._DRIVE_POS, self._DRIVE_COUNT)
-        self._folder = self.TablePointer(self, self._FOLDER_POS, self._FOLDER_COUNT)
-        self._file = self.TablePointer(self, self._FILE_POS, self._FILE_COUNT)
-        self._name = self.TablePointer(self, self._NAME_POS, self._NAME_COUNT)
+
+        self._drive = self.TablePointer(
+            self, drive_pos_ptr or self._DRIVE_POS, drive_count_ptr or self._DRIVE_COUNT
+        )
+        self._folder = self.TablePointer(
+            self,
+            folder_pos_ptr or self._FOLDER_POS,
+            folder_count_ptr or self._FOLDER_COUNT,
+        )
+        self._file = self.TablePointer(
+            self, file_pos_ptr or self._FILE_POS, file_count_ptr or self._FILE_COUNT
+        )
+        self._name = self.TablePointer(
+            self, name_pos_ptr or self._NAME_POS, name_count_ptr or self._NAME_COUNT
+        )
 
     # DRIVE
     @property
