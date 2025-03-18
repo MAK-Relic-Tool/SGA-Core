@@ -23,6 +23,7 @@ from relic.core.lazyio import BinaryProxy, get_proxy
 from relic.core.entrytools import EntrypointRegistry
 
 from relic.sga.core.definitions import Version, MAGIC_WORD
+from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencefs.definitions import EssenceFS
 from relic.sga.core.serialization import (
     VersionSerializer,
@@ -122,9 +123,13 @@ class EssenceFsOpener(
         try:
             opener: Union[Type[EssenceFsOpenerPlugin], EssenceFsOpenerPlugin] = self[version]  # type: ignore
         except KeyError as e:
-            raise RelicToolError(
-                f"Version {version} not supported! Supported SGA Versions '{list(self.keys())}'."
-            )
+
+            def _key2version(key: str) -> Version:
+                major, minor = key.split(".")
+                return Version(int(major[1:]), int(minor))
+
+            supported_versions = [_key2version(key) for key in self.keys()]
+            raise VersionNotSupportedError(version, supported_versions) from e
 
         if isinstance(opener, type):
             opener: EssenceFsOpenerPlugin = opener()  # type: ignore

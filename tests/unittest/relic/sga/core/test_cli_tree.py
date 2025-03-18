@@ -1,14 +1,13 @@
 import logging
-import os
 import random
-import tempfile
 from io import StringIO
 from typing import Optional
 
 import pytest
 from relic.core import CLI
 
-from dummy_essencefs import write_random_essencefs, register_randomfs_opener
+from tests.dummy_essencefs import write_random_essencefs, register_randomfs_opener
+from tests.util import TempFileHandle
 
 
 def random_nums(a, b, count=1, seed: Optional[int] = None):
@@ -16,28 +15,6 @@ def random_nums(a, b, count=1, seed: Optional[int] = None):
         random.seed = seed
     for _ in range(count):
         yield random.randint(a, b)
-
-
-class TempFileHandle:
-    def __init__(self):
-        with tempfile.NamedTemporaryFile("x", delete=False) as h:
-            self._filename = h.name
-
-    @property
-    def path(self):
-        return self._filename
-
-    def open(self, mode: str):
-        return open(self._filename, mode)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        try:
-            os.unlink(self._filename)
-        except Exception as e:
-            print(e)
 
 
 SEEDS = random_nums(0, 8675309, 8, seed="DEADBEEF".__hash__())
