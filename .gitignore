@@ -5,7 +5,7 @@ __pycache__/
 # Ignore Pycharm
 .idea/
 
-# Ignore vscode 
+# Ignore vscode
 .vscode/
 
 #Ignore pytest
@@ -26,3 +26,4 @@ docs/source/generated/**
 
 # Ignore local builds
 build/**
+.coverage
