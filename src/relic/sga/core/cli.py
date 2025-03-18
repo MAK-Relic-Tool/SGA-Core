@@ -38,17 +38,12 @@ def _get_path_validator(exists: bool) -> Callable[[str], str]:
             parent, _ = os.path.split(_path)
 
             if len(parent) != 0 and parent != _path:
-                return _step(parent)
+                _step(parent)
 
-            if not os.path.exists(parent):
-                return None
-
-            if os.path.isfile(parent):
+            if os.path.exists(parent) and os.path.isfile(parent):
                 raise argparse.ArgumentTypeError(
                     f"The given path '{path}' is not a valid path; it treats a file ({parent}) as a directory!"
                 )
-
-            return None
 
         if exists and not os.path.exists(path):
             raise _arg_exists_err(path)
@@ -334,7 +329,10 @@ class RelicSgaVersionCli(CliPlugin):
                 else:
                     version = VersionSerializer.read(sga)
                     logger.info(version)
-        except IOError:
+        except IOError:  # pragma: nocover
+            # I don't know how to force an io error here for coverage testing
+            # we safely handle bad file paths
+            # So I believe this only occurs when a genuine fatal error occurs
             logger.error("Error reading file")
             raise
         return None
