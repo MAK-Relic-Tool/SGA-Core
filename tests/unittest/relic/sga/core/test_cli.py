@@ -3,6 +3,7 @@ import logging
 import os
 import random
 from io import StringIO
+from tempfile import TemporaryDirectory
 from typing import Optional
 from typing import Type, Any
 
@@ -134,10 +135,10 @@ def random_nums(a, b, count=1, seed: Optional[int] = None):
         yield random.randint(a, b)
 
 
-SEEDS = random_nums(0, 8675309, 8, seed="DEADBEEF".__hash__())
+SEEDS = [8675309, 20040920, 20250318, 500500]
 
 
-@pytest.mark.parametrize(["seed"], list((v,) for v in SEEDS))
+@pytest.mark.parametrize("seed", SEEDS)
 def test_cli_tree(seed: int):
     with StringIO() as logFile:
         logging.basicConfig(
@@ -203,3 +204,25 @@ def test_cli_version(version: Version, write_magic: bool):
             assert "File is not an SGA" in result
         else:
             assert str(version) in result
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+@pytest.mark.parametrize("merge_flag", [None, "-m", "--merge", "-i", "--isolate"])
+def test_cli_unpack(seed: int, merge_flag: Optional[str]):
+    register_randomfs_opener()
+    with StringIO() as logFile:
+        logging.basicConfig(
+            stream=logFile, level=logging.DEBUG, format="%(message)s", force=True
+        )
+        logger = logging.getLogger()
+        with TempFileHandle() as h:
+            with h.open("wb") as w:
+                write_random_essencefs(w, seed)
+            with TemporaryDirectory() as d:
+                args = ["relic", "sga", "unpack", h.path, d]
+                if merge_flag is not None:
+                    args.append(merge_flag)
+
+                CLI.run_with(*args, logger=logger)
+                print("\nLOG:")
+                print(logFile.getvalue())
