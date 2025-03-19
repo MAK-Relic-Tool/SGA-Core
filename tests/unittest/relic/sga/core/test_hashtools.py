@@ -1,4 +1,5 @@
 import dataclasses
+import itertools
 from dataclasses import dataclass
 from hashlib import md5 as calc_md5, sha1 as calc_sha1
 from io import BytesIO
@@ -156,10 +157,19 @@ _HASHER_CHECK_TEST_IDS = list(
     for _ in _HASHER_CHECK_TESTS
 )
 
-_HASHER_VALIDATE_ERR_TESTS = list(
-    (hasher, args, buffer, err_cls)
+_HASHER_VALIDATE_ERR_TESTS_BASE_ERR_CLS = list(
+    (hasher, args, buffer, err_cls, False)
     for (hasher, args, buffer, passing, err_cls) in _TEST_DATA
     if not passing
+)
+_HASHER_VALIDATE_ERR_TESTS_ALT_ERR_CLS = [
+    (hasher, args, buffer, HashMismatchError, True)
+    for (hasher, args, buffer, _, _) in _HASHER_VALIDATE_ERR_TESTS_BASE_ERR_CLS
+]
+_HASHER_VALIDATE_ERR_TESTS = list(
+    itertools.chain(
+        _HASHER_VALIDATE_ERR_TESTS_BASE_ERR_CLS, _HASHER_VALIDATE_ERR_TESTS_ALT_ERR_CLS
+    )
 )
 _HASHER_VALIDATE_ERR_IDS = list(
     f"{_[0].__name__} ~ {_[1]} ~ {_[2]} ~ {_[3]}" for _ in _HASHER_VALIDATE_ERR_TESTS
@@ -183,6 +193,16 @@ def test_hasher_hash(hasher: Hasher, args: HashArgs, expected: _T):
     if hasattr(args.stream, "seek"):
         args.stream.seek(0)
     result = hasher.hash(**args.hash_kwargs)
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ["hasher", "args", "expected"], _HASHER_TESTS, ids=_HASHER_TEST_IDS
+)
+def test_hasher_call(hasher: Hasher, args: HashArgs, expected: _T):
+    if hasattr(args.stream, "seek"):
+        args.stream.seek(0)
+    result = hasher(**args.hash_kwargs)
     assert result == expected
 
 
@@ -221,7 +241,7 @@ def test_hasher_validate(
 
 
 @pytest.mark.parametrize(
-    ["hasher", "args", "expected_failure", "expected_err_cls"],
+    ["hasher", "args", "expected_failure", "expected_err_cls", "pass_err_cls"],
     _HASHER_VALIDATE_ERR_TESTS,
     ids=_HASHER_VALIDATE_ERR_IDS,
 )
@@ -230,14 +250,19 @@ def test_hasher_validate_err_cls(
     args: HashArgs,
     expected_failure: _T,
     expected_err_cls: Type[HashMismatchError],
+    pass_err_cls: bool,
 ):
     if hasattr(args.stream, "seek"):
         args.stream.seek(0)
 
     try:
-        hasher.validate(**args.hash_kwargs, expected=expected_failure)
-    except expected_err_cls:
-        pass
+        hasher.validate(
+            **args.hash_kwargs,
+            expected=expected_failure,
+            err_cls=(expected_err_cls if pass_err_cls else None),
+        )
+    except expected_err_cls as e:
+        assert isinstance(e, expected_err_cls)
     except Exception as e:
         assert isinstance(e, expected_err_cls)
     else:

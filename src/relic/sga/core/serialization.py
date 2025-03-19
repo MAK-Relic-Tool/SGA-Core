@@ -11,7 +11,6 @@ from typing import (
     List,
     Protocol,
     Union,
-    Iterable,
     TypeVar,
     Dict,
     Literal,
@@ -60,9 +59,6 @@ class ArchivePtrs(Protocol):
 
 
 class SgaHeader(BinaryProxySerializer, ArchivePtrs):
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent)
-
     @property
     def name(self) -> str:
         raise NotImplementedError
@@ -128,14 +124,37 @@ class SgaTocHeader(BinaryProxySerializer):
             self.offset = pos
             self.count = count
 
-    def __init__(self, parent: BinaryIO):
+    # Non-breaking change to init; old-style class-var init still works
+    def __init__(
+        self,
+        parent: BinaryIO,
+        drive_pos_ptr: Optional[Tuple[int, int]] = None,
+        drive_count_ptr: Optional[Tuple[int, int]] = None,
+        folder_pos_ptr: Optional[Tuple[int, int]] = None,
+        folder_count_ptr: Optional[Tuple[int, int]] = None,
+        file_pos_ptr: Optional[Tuple[int, int]] = None,
+        file_count_ptr: Optional[Tuple[int, int]] = None,
+        name_pos_ptr: Optional[Tuple[int, int]] = None,
+        name_count_ptr: Optional[Tuple[int, int]] = None,
+    ):
         super().__init__(
             parent,
         )
-        self._drive = self.TablePointer(self, self._DRIVE_POS, self._DRIVE_COUNT)
-        self._folder = self.TablePointer(self, self._FOLDER_POS, self._FOLDER_COUNT)
-        self._file = self.TablePointer(self, self._FILE_POS, self._FILE_COUNT)
-        self._name = self.TablePointer(self, self._NAME_POS, self._NAME_COUNT)
+
+        self._drive = self.TablePointer(
+            self, drive_pos_ptr or self._DRIVE_POS, drive_count_ptr or self._DRIVE_COUNT
+        )
+        self._folder = self.TablePointer(
+            self,
+            folder_pos_ptr or self._FOLDER_POS,
+            folder_count_ptr or self._FOLDER_COUNT,
+        )
+        self._file = self.TablePointer(
+            self, file_pos_ptr or self._FILE_POS, file_count_ptr or self._FILE_COUNT
+        )
+        self._name = self.TablePointer(
+            self, name_pos_ptr or self._NAME_POS, name_count_ptr or self._NAME_COUNT
+        )
 
     # DRIVE
     @property
@@ -168,11 +187,6 @@ class SgaTocDrive(BinaryProxySerializer):
     _INT_SIGNED: ClassVar[bool] = False
     _STR_ENC = "ascii"
     _STR_PAD = "\0"
-
-    def __init__(self, parent: BinaryIO):
-        super().__init__(
-            parent,
-        )
 
     @property
     def alias(self) -> str:
@@ -284,9 +298,6 @@ class SgaTocFolder(BinaryProxySerializer):
     _INT_BYTEORDER: ClassVar[Literal["little"]] = "little"
     _INT_SIGNED: ClassVar[bool] = False
 
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent)
-
     @property
     def name_offset(self) -> int:
         return self._serializer.int.read(
@@ -375,6 +386,7 @@ class SgaNameWindow(BinaryProxySerializer):
         count: int,
         length_mode: bool = False,
         encoding: str = "utf-8",
+        cacheable: Optional[bool] = None,
     ) -> None:
         size = count if length_mode else tell_end(parent)
         self._window = BinaryWindow(parent, offset, size, name="SGA ToC Name Buffer")
@@ -382,7 +394,11 @@ class SgaNameWindow(BinaryProxySerializer):
         self._count = count if not length_mode else None
 
         self._encoding = encoding
-        self._cacheable = parent.readable() and not parent.writable()
+        self._cacheable = (
+            (parent.readable() and not parent.writable())
+            if cacheable is None
+            else cacheable
+        )
         self.length_mode = length_mode
 
         self._cache: Optional[Dict[int, str]] = None
@@ -391,8 +407,9 @@ class SgaNameWindow(BinaryProxySerializer):
     def _init_cache(self) -> None:
         if not self._cacheable:
             return
-        if self._cache is None:
-            self._cache = {}
+        if self._cache is not None:
+            return
+        self._cache = {}
 
         # Length mode can preload the cache
         if self.length_mode:
@@ -446,9 +463,11 @@ class SgaTocInfoArea(Generic[_TocWindowCls]):
     ) -> None:
         self._parent = parent
         self._cls: Type[_TocWindowCls] = cls
-        if hasattr(self._cls, "_SIZE"):
-            self._cls_size = self._cls._SIZE
-        elif cls_size is not None:
+
+        if cls_size is None and hasattr(self._cls, "_SIZE"):
+            cls_size = self._cls._SIZE
+
+        if cls_size is not None:
             self._cls_size = cls_size
         else:
             raise RelicToolError("TOC Window size could not be determined!")
@@ -515,8 +534,6 @@ class SgaTocFile:
 
 
 class SgaToc(BinaryProxySerializer):
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent)
 
     @property
     def header(self) -> SgaTocHeader:

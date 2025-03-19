@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import zlib
 from typing import BinaryIO, Optional, Generic, TypeVar, Type, Union, Protocol
 
@@ -39,8 +40,13 @@ class Hasher(Generic[_T]):
         self._hasher_name = hasher_name
         self._default_err_cls = default_err_cls
         self._hash_func = hash_func
-        if not hasattr(self, "__name__"):
-            self.__name__ = self._hasher_name
+        if hasattr(self, "__name__"):
+            logging.warning(
+                "Hasher already has __name__ dunder, overwriting '%s' with '%s'",
+                self.__name__,
+                self._hasher_name,
+            )  # pragma: nocover
+        self.__name__ = self._hasher_name
 
     def __call__(
         self,
