@@ -261,7 +261,15 @@ class TestVersionSerializer:
 
 @pytest.mark.parametrize("len_mode", [True, False])
 @pytest.mark.parametrize(
-    "names", [["alice"], ["alice", "bob"], ["alice", "bob", "charles"]]
+    "names",
+    [
+        ["alice"],
+        ["alice", "bob"],
+        ["alice", "bob", "charles"],
+        [
+            "a-really-long-name-that-exceeds-64-bytes-because-i-set-that-as-the-arbitrary-name-buffer-size"
+        ],
+    ],
 )
 @pytest.mark.parametrize("cacheable", [True, False, None])
 def test_sga_name_window(names: List[str], len_mode: bool, cacheable: Optional[bool]):
@@ -287,6 +295,21 @@ def test_sga_name_window(names: List[str], len_mode: bool, cacheable: Optional[b
             assert result == name
 
 
+@pytest.mark.parametrize("len_mode", [True, False])
+@pytest.mark.parametrize("cacheable", [True, False, None])
+def test_sga_name_window_reinit_cache(len_mode: bool, cacheable: Optional[bool]):
+    ENCODING = "utf-8"
+
+    with BytesIO(b"") as handle:
+        window = module.SgaNameWindow(
+            handle, 0, 0, len_mode, encoding=ENCODING, cacheable=cacheable
+        )
+        cache = window._cache
+        window._init_cache()
+        new_cache = window._cache
+        assert new_cache == cache
+
+
 with BytesIO() as _h:
     FakeSgaTocDrive.write_fake(_h, "test", "fake", (0, 1), (2, 3), 4)
     _FAKE_SGA_TOC_DRIVE_BUFFER = _h.getvalue()
@@ -309,71 +332,79 @@ def test_sga_toc_info_area_bad_window_size():
 
 
 @pytest.mark.parametrize(
-    ["klass", "buffer"],
+    ["cls", "buffer"],
     [
         (FakeSgaTocDrive, _FAKE_SGA_TOC_DRIVE_BUFFER),
         (FakeSgaTocFolder, _FAKE_SGA_TOC_FOLDER_BUFFER),
     ],
 )
 @pytest.mark.parametrize("specify_size", [True, False])
-def test_init(buffer: bytes, klass: Type[module._TocWindowCls], specify_size: bool):
+def test_init(buffer: bytes, cls: Type[module._TocWindowCls], specify_size: bool):
     with BytesIO(buffer) as r:
         cls_size = None
         if specify_size:
-            if not hasattr(klass, "_SIZE"):
+            if not hasattr(cls, "_SIZE"):
                 pytest.skip("Cannot specify size; size not known")
-            cls_size = klass._SIZE
-        area = module.SgaTocInfoArea(r, 0, 1, klass, cls_size)
+            cls_size = cls._SIZE
+        area = module.SgaTocInfoArea(r, 0, 1, cls, cls_size)
         assert len(area) == 1
 
 
 @pytest.mark.parametrize(
-    ["klass", "buffer"],
+    ["cls", "buffer"],
     [
         (FakeSgaTocDrive, _FAKE_SGA_TOC_DRIVE_BUFFER),
         (FakeSgaTocFolder, _FAKE_SGA_TOC_FOLDER_BUFFER),
     ],
 )
-def test_get_item_by_slice(buffer: bytes, klass: Type[module._TocWindowCls]):
+def test_get_item_by_slice(buffer: bytes, cls: Type[module._TocWindowCls]):
     with BytesIO(buffer) as r:
-        area = module.SgaTocInfoArea(r, 0, 1, klass)
+        area = module.SgaTocInfoArea(r, 0, 1, cls)
         assert len(area) == 1
         sliced = area[0:1]
         assert sliced[0] == area[0]
 
 
 @pytest.mark.parametrize(
-    ["klass", "buffer"],
+    ["cls", "buffer"],
     [
         (FakeSgaTocDrive, _FAKE_SGA_TOC_DRIVE_BUFFER),
         (FakeSgaTocFolder, _FAKE_SGA_TOC_FOLDER_BUFFER),
     ],
 )
-@pytest.mark.parametrize("err", [True, False])
-def test_get_item(buffer: bytes, klass: Type[module._TocWindowCls], err: bool):
-    print(err)
+def test_get_item(buffer: bytes, cls: Type[module._TocWindowCls]):
     with BytesIO(buffer) as r:
-        area = module.SgaTocInfoArea(r, 0, 1, klass)
-        assert len(area) == 1
-        try:
-            _ = area[1 if err else 0]
-        except IndexError:
-            if not err:
-                pytest.fail("Expected to pass, got IndexError")
-        else:
-            if err:
-                pytest.fail("Expected to fail, did not get IndexError")
+        area = module.SgaTocInfoArea(r, 0, 1, cls)
+        _ = area[0]
 
 
 @pytest.mark.parametrize(
-    ["klass", "buffer"],
+    ["cls", "buffer"],
     [
         (FakeSgaTocDrive, _FAKE_SGA_TOC_DRIVE_BUFFER),
         (FakeSgaTocFolder, _FAKE_SGA_TOC_FOLDER_BUFFER),
     ],
 )
-def test_get_item(buffer: bytes, klass: Type[module._TocWindowCls]):
+def test_get_item_oob(buffer: bytes, cls: Type[module._TocWindowCls]):
     with BytesIO(buffer) as r:
-        area = module.SgaTocInfoArea(r, 0, 1, klass)
+        area = module.SgaTocInfoArea(r, 0, 1, cls)
+        try:
+            _ = area[1]
+        except IndexError:
+            pass
+        else:
+            pytest.fail("Should have raised IndexError")
+
+
+@pytest.mark.parametrize(
+    ["cls", "buffer"],
+    [
+        (FakeSgaTocDrive, _FAKE_SGA_TOC_DRIVE_BUFFER),
+        (FakeSgaTocFolder, _FAKE_SGA_TOC_FOLDER_BUFFER),
+    ],
+)
+def test_get_item(buffer: bytes, cls: Type[module._TocWindowCls]):
+    with BytesIO(buffer) as r:
+        area = module.SgaTocInfoArea(r, 0, 1, cls)
         for i, item in enumerate(area):
             assert item == area[i]

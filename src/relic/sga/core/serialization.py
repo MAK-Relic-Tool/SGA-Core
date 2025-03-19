@@ -407,8 +407,9 @@ class SgaNameWindow(BinaryProxySerializer):
     def _init_cache(self) -> None:
         if not self._cacheable:
             return
-        if self._cache is None:
-            self._cache = {}
+        if self._cache is not None:
+            return
+        self._cache = {}
 
         # Length mode can preload the cache
         if self.length_mode:
