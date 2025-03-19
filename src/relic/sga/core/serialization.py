@@ -59,9 +59,6 @@ class ArchivePtrs(Protocol):
 
 
 class SgaHeader(BinaryProxySerializer, ArchivePtrs):
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent)
-
     @property
     def name(self) -> str:
         raise NotImplementedError
@@ -191,11 +188,6 @@ class SgaTocDrive(BinaryProxySerializer):
     _STR_ENC = "ascii"
     _STR_PAD = "\0"
 
-    def __init__(self, parent: BinaryIO):
-        super().__init__(
-            parent,
-        )
-
     @property
     def alias(self) -> str:
         return self._serializer.c_string.read(
@@ -306,9 +298,6 @@ class SgaTocFolder(BinaryProxySerializer):
     _INT_BYTEORDER: ClassVar[Literal["little"]] = "little"
     _INT_SIGNED: ClassVar[bool] = False
 
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent)
-
     @property
     def name_offset(self) -> int:
         return self._serializer.int.read(
@@ -397,6 +386,7 @@ class SgaNameWindow(BinaryProxySerializer):
         count: int,
         length_mode: bool = False,
         encoding: str = "utf-8",
+        cacheable: Optional[bool] = None,
     ) -> None:
         size = count if length_mode else tell_end(parent)
         self._window = BinaryWindow(parent, offset, size, name="SGA ToC Name Buffer")
@@ -404,7 +394,11 @@ class SgaNameWindow(BinaryProxySerializer):
         self._count = count if not length_mode else None
 
         self._encoding = encoding
-        self._cacheable = parent.readable() and not parent.writable()
+        self._cacheable = (
+            (parent.readable() and not parent.writable())
+            if cacheable is None
+            else cacheable
+        )
         self.length_mode = length_mode
 
         self._cache: Optional[Dict[int, str]] = None
@@ -468,9 +462,11 @@ class SgaTocInfoArea(Generic[_TocWindowCls]):
     ) -> None:
         self._parent = parent
         self._cls: Type[_TocWindowCls] = cls
-        if hasattr(self._cls, "_SIZE"):
-            self._cls_size = self._cls._SIZE
-        elif cls_size is not None:
+
+        if cls_size is None and hasattr(self._cls, "_SIZE"):
+            cls_size = self._cls._SIZE
+
+        if cls_size is not None:
             self._cls_size = cls_size
         else:
             raise RelicToolError("TOC Window size could not be determined!")
@@ -537,8 +533,6 @@ class SgaTocFile:
 
 
 class SgaToc(BinaryProxySerializer):
-    def __init__(self, parent: BinaryIO):
-        super().__init__(parent)
 
     @property
     def header(self) -> SgaTocHeader:
