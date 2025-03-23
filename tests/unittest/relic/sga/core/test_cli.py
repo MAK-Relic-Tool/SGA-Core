@@ -14,9 +14,6 @@ from relic.core.cli import CliPluginGroup, CliPlugin
 
 from relic.sga.core import Version, MAGIC_WORD
 from relic.sga.core.cli import (
-    _get_path_validator,
-    _get_dir_type_validator,
-    _get_file_type_validator,
     RelicSgaCli,
     RelicSgaUnpackCli,
     RelicSgaInfoCli,
@@ -28,86 +25,6 @@ from relic.sga.core.cli import (
 from relic.sga.core.serialization import VersionSerializer
 from tests.dummy_essencefs import write_random_essencefs, register_randomfs_opener
 from tests.util import TempFileHandle
-
-EXISTS_FILE_PATH = __file__
-EXISTS_FOLD_PATH = os.path.join(__file__, "..")
-INVALID_DIR_PATH = os.path.join(__file__, "doesnotexist.txt")
-NONEXIST_PATH = os.path.join(__file__, "..\\doesnotexist.txt")
-
-
-@pytest.mark.parametrize(
-    ["exists", "path", "should_fail"],
-    [
-        (True, EXISTS_FILE_PATH, False),
-        (False, EXISTS_FILE_PATH, False),
-        (True, EXISTS_FOLD_PATH, False),
-        (False, EXISTS_FOLD_PATH, False),
-        (True, NONEXIST_PATH, True),
-        (False, NONEXIST_PATH, False),
-        (True, INVALID_DIR_PATH, True),
-        (False, INVALID_DIR_PATH, True),
-    ],
-)
-def test_get_path_validator(exists: bool, path: str, should_fail: bool):
-    validator = _get_path_validator(exists)
-    try:
-        validator(path)
-    except argparse.ArgumentTypeError:
-        if not should_fail:
-            pytest.fail("Validator failed when it was expected to pass")
-    else:
-        if should_fail:
-            pytest.fail("Validator passed when it was expected to fail")
-
-
-@pytest.mark.parametrize(
-    ["exists", "path", "should_fail"],
-    [
-        (True, EXISTS_FILE_PATH, True),
-        (False, EXISTS_FILE_PATH, True),
-        (True, EXISTS_FOLD_PATH, False),
-        (False, EXISTS_FOLD_PATH, False),
-        (True, NONEXIST_PATH, True),
-        (False, NONEXIST_PATH, False),
-        (True, INVALID_DIR_PATH, True),
-        (False, INVALID_DIR_PATH, True),
-    ],
-)
-def test_get_dir_type_validator(exists: bool, path: str, should_fail: bool):
-    validator = _get_dir_type_validator(exists)
-    try:
-        validator(path)
-    except argparse.ArgumentTypeError:
-        if not should_fail:
-            pytest.fail("Validator failed when it was expected to pass")
-    else:
-        if should_fail:
-            pytest.fail("Validator passed when it was expected to fail")
-
-
-@pytest.mark.parametrize(
-    ["exists", "path", "should_fail"],
-    [
-        (True, EXISTS_FILE_PATH, False),
-        (False, EXISTS_FILE_PATH, False),
-        (True, EXISTS_FOLD_PATH, True),
-        (False, EXISTS_FOLD_PATH, True),
-        (True, NONEXIST_PATH, True),
-        (False, NONEXIST_PATH, False),
-        (True, INVALID_DIR_PATH, True),
-        (False, INVALID_DIR_PATH, True),
-    ],
-)
-def test_get_file_type_validator(exists: bool, path: str, should_fail: bool):
-    validator = _get_file_type_validator(exists)
-    try:
-        validator(path)
-    except argparse.ArgumentTypeError:
-        if not should_fail:
-            pytest.fail("Validator failed when it was expected to pass")
-    else:
-        if should_fail:
-            pytest.fail("Validator passed when it was expected to fail")
 
 
 @pytest.mark.parametrize(

@@ -22,73 +22,13 @@ from relic.sga.core.essencefs import EssenceFS
 from relic.sga.core.essencefs.opener import registry as sga_registry
 from relic.sga.core.serialization import VersionSerializer
 from relic.core.logmsg import BraceMessage
+from relic.core.cli import (
+    get_file_type_validator,
+    get_dir_type_validator,
+    get_path_validator,
+)
 
 _SUCCESS = 0
-
-
-def _arg_exists_err(value: str) -> argparse.ArgumentTypeError:
-    return argparse.ArgumentTypeError(f"The given path '{value}' does not exist!")
-
-
-def _get_path_validator(exists: bool) -> Callable[[str], str]:
-    def _path_type(path: str) -> str:
-        path = os.path.abspath(path)
-
-        def _step(_path: str) -> None:
-            parent, _ = os.path.split(_path)
-
-            if len(parent) != 0 and parent != _path:
-                _step(parent)
-
-            if os.path.exists(parent) and os.path.isfile(parent):
-                raise argparse.ArgumentTypeError(
-                    f"The given path '{path}' is not a valid path; it treats a file ({parent}) as a directory!"
-                )
-
-        if exists and not os.path.exists(path):
-            raise _arg_exists_err(path)
-
-        _step(path)  # we want step to validate; but we dont care about its result
-
-        return path
-
-    return _path_type
-
-
-def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
-    validate_path = _get_path_validator(False)
-
-    def _dir_type(path: str) -> str:
-        path = os.path.abspath(path)
-        if not os.path.exists(path):
-            if exists:
-                raise _arg_exists_err(path)
-            return validate_path(path)
-
-        if os.path.isdir(path):
-            return path
-
-        raise argparse.ArgumentTypeError(f"The given path '{path}' is not a directory!")
-
-    return _dir_type
-
-
-def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
-    validate_path = _get_path_validator(False)
-
-    def _file_type(path: str) -> str:
-        path = os.path.abspath(path)
-        if not os.path.exists(path):
-            if exists:
-                raise _arg_exists_err(path)
-            return validate_path(path)
-
-        if os.path.isfile(path):
-            return path
-
-        raise argparse.ArgumentTypeError(f"The given path '{path}' is not a file!")
-
-    return _file_type
 
 
 class RelicSgaCli(CliPluginGroup):
@@ -119,12 +59,12 @@ class RelicSgaUnpackCli(CliPlugin):
 
         parser.add_argument(
             "src_sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="Source SGA File",
         )
         parser.add_argument(
             "out_dir",
-            type=_get_dir_type_validator(exists=False),
+            type=get_dir_type_validator(exists=False),
             help="Output Directory",
         )
         sga_root_flags = parser.add_mutually_exclusive_group()
@@ -211,12 +151,12 @@ class RelicSgaInfoCli(CliPlugin):
 
         parser.add_argument(
             "src_sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="Source SGA File",
         )
         parser.add_argument(
             "out_json",
-            type=_get_path_validator(exists=False),
+            type=get_path_validator(exists=False),
             help="Output File or Directory",
         )
         parser.add_argument(
@@ -274,7 +214,7 @@ class RelicSgaTreeCli(CliPlugin):
 
         parser.add_argument(
             "src_sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="SGA File",
         )
 
@@ -307,7 +247,7 @@ class RelicSgaVersionCli(CliPlugin):
 
         parser.add_argument(
             "sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="SGA File",
         )
 
