@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import dataclasses
 import json
 import logging
@@ -9,7 +8,7 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 from json import JSONEncoder
 from logging import Logger
-from typing import Optional, Callable, Any, Dict
+from typing import Optional, Any, Dict
 
 import relic.core.cli
 from fs import open_fs
@@ -22,78 +21,13 @@ from relic.sga.core.essencefs import EssenceFS
 from relic.sga.core.essencefs.opener import registry as sga_registry
 from relic.sga.core.serialization import VersionSerializer
 from relic.core.logmsg import BraceMessage
+from relic.core.cli import (
+    get_file_type_validator,
+    get_dir_type_validator,
+    get_path_validator,
+)
 
 _SUCCESS = 0
-
-
-def _arg_exists_err(value: str) -> argparse.ArgumentTypeError:
-    return argparse.ArgumentTypeError(f"The given path '{value}' does not exist!")
-
-
-def _get_path_validator(exists: bool) -> Callable[[str], str]:
-    def _path_type(path: str) -> str:
-        path = os.path.abspath(path)
-
-        def _step(_path: str) -> None:
-            parent, _ = os.path.split(_path)
-
-            if len(parent) != 0 and parent != _path:
-                return _step(parent)
-
-            if not os.path.exists(parent):
-                return None
-
-            if os.path.isfile(parent):
-                raise argparse.ArgumentTypeError(
-                    f"The given path '{path}' is not a valid path; it treats a file ({parent}) as a directory!"
-                )
-
-            return None
-
-        if exists and not os.path.exists(path):
-            raise _arg_exists_err(path)
-
-        _step(path)  # we want step to validate; but we dont care about its result
-
-        return path
-
-    return _path_type
-
-
-def _get_dir_type_validator(exists: bool) -> Callable[[str], str]:
-    validate_path = _get_path_validator(False)
-
-    def _dir_type(path: str) -> str:
-        path = os.path.abspath(path)
-        if not os.path.exists(path):
-            if exists:
-                raise _arg_exists_err(path)
-            return validate_path(path)
-
-        if os.path.isdir(path):
-            return path
-
-        raise argparse.ArgumentTypeError(f"The given path '{path}' is not a directory!")
-
-    return _dir_type
-
-
-def _get_file_type_validator(exists: Optional[bool]) -> Callable[[str], str]:
-    validate_path = _get_path_validator(False)
-
-    def _file_type(path: str) -> str:
-        path = os.path.abspath(path)
-        if not os.path.exists(path):
-            if exists:
-                raise _arg_exists_err(path)
-            return validate_path(path)
-
-        if os.path.isfile(path):
-            return path
-
-        raise argparse.ArgumentTypeError(f"The given path '{path}' is not a file!")
-
-    return _file_type
 
 
 class RelicSgaCli(CliPluginGroup):
@@ -124,12 +58,12 @@ class RelicSgaUnpackCli(CliPlugin):
 
         parser.add_argument(
             "src_sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="Source SGA File",
         )
         parser.add_argument(
             "out_dir",
-            type=_get_dir_type_validator(exists=False),
+            type=get_dir_type_validator(exists=False),
             help="Output Directory",
         )
         sga_root_flags = parser.add_mutually_exclusive_group()
@@ -155,7 +89,8 @@ class RelicSgaUnpackCli(CliPlugin):
         merge: bool = ns.merge
         isolate: bool = ns.isolate
 
-        if merge and isolate:
+        if merge and isolate:  # pragma: nocover
+            # This error should be impossible
             raise relic.core.cli.RelicArgParserError(
                 "Isolate and Merge flags are mutually exclusive"
             )
@@ -165,21 +100,12 @@ class RelicSgaUnpackCli(CliPlugin):
         def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
             logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
-        if merge:  # we can short circuit the merge flag case
-            copy_fs(
-                f"sga://{infile}",
-                f"osfs://{outdir}",
-                on_copy=_callback,
-                preserve_time=True,
-            )
-            return _SUCCESS
-
         # we need to open the archive to 'isolate' or to determine if we implicit merge
         sga: EssenceFS
         with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
             roots = list(sga.iterate_fs())
-            # Implicit merge; we reuse sga to avoid reopening the filesystem
-            if not isolate and len(roots) == 1:
+            # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
+            if merge or (not isolate and len(roots) == 1):
                 copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
                 return _SUCCESS
 
@@ -224,12 +150,12 @@ class RelicSgaInfoCli(CliPlugin):
 
         parser.add_argument(
             "src_sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="Source SGA File",
         )
         parser.add_argument(
             "out_json",
-            type=_get_path_validator(exists=False),
+            type=get_path_validator(exists=False),
             help="Output File or Directory",
         )
         parser.add_argument(
@@ -255,7 +181,9 @@ class RelicSgaInfoCli(CliPlugin):
             info = sga.info_tree()
 
             outjson_dir, outjson_file = os.path.split(outjson)
-            if len(outjson_file) == 0:  # Directory
+            if len(outjson_file) == 0 or (
+                os.path.exists(outjson) and os.path.isdir(outjson)
+            ):  # Directory
                 # Get name of sga without extension, then add .json extension
                 outjson_dir = outjson
                 outjson_file = os.path.splitext(os.path.split(infile)[1])[0] + ".json"
@@ -285,7 +213,7 @@ class RelicSgaTreeCli(CliPlugin):
 
         parser.add_argument(
             "src_sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="SGA File",
         )
 
@@ -318,7 +246,7 @@ class RelicSgaVersionCli(CliPlugin):
 
         parser.add_argument(
             "sga",
-            type=_get_file_type_validator(exists=True),
+            type=get_file_type_validator(exists=True),
             help="SGA File",
         )
 
@@ -334,7 +262,10 @@ class RelicSgaVersionCli(CliPlugin):
                 else:
                     version = VersionSerializer.read(sga)
                     logger.info(version)
-        except IOError:
+        except IOError:  # pragma: nocover
+            # I don't know how to force an io error here for coverage testing
+            # we safely handle bad file paths
+            # So I believe this only occurs when a genuine fatal error occurs
             logger.error("Error reading file")
             raise
         return None

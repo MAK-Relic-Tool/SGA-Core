@@ -1,2 +1,2 @@
 fs>=2.4.16
-relic-tool-core>=2.3.0
+relic-tool-core>=2.4.0

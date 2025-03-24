@@ -2,27 +2,18 @@ from __future__ import annotations
 
 import os
 from os.path import expanduser
-from typing import (
-    Dict,
-    Optional,
-    Protocol,
-    BinaryIO,
-    TypeVar,
-    List,
-    Iterable,
-    Union,
-    Type,
-)
+from typing import Protocol, BinaryIO, TypeVar, List, Iterable, Union, Type
 
 import fs.opener
 from fs.opener import Opener
-from fs.opener.errors import OpenerError
+
 from fs.opener.parse import ParseResult
 from relic.core.errors import RelicToolError
 from relic.core.lazyio import BinaryProxy, get_proxy
 from relic.core.entrytools import EntrypointRegistry
 
 from relic.sga.core.definitions import Version, MAGIC_WORD
+from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencefs.definitions import EssenceFS
 from relic.sga.core.serialization import (
     VersionSerializer,
@@ -62,7 +53,7 @@ def _get_version(file: Union[BinaryProxy, BinaryIO], advance: bool = False) -> V
     MAGIC_WORD.validate(binio, advance=True)
     version = VersionSerializer.read(binio)
     if not advance:
-        binio.seek(start, os.SEEK_CUR)
+        binio.seek(start, os.SEEK_SET)
     return version
 
 
@@ -122,9 +113,13 @@ class EssenceFsOpener(
         try:
             opener: Union[Type[EssenceFsOpenerPlugin], EssenceFsOpenerPlugin] = self[version]  # type: ignore
         except KeyError as e:
-            raise RelicToolError(
-                f"Version {version} not supported! Supported SGA Versions '{list(self.keys())}'."
-            )
+
+            def _key2version(key: str) -> Version:
+                major, minor = key.split(".")
+                return Version(int(major[1:]), int(minor))
+
+            supported_versions = [_key2version(key) for key in self._backing.keys()]
+            raise VersionNotSupportedError(version, supported_versions) from e
 
         if isinstance(opener, type):
             opener: EssenceFsOpenerPlugin = opener()  # type: ignore
@@ -133,5 +128,33 @@ class EssenceFsOpener(
 
 
 registry: EssenceFsOpener[EssenceFS] = EssenceFsOpener()
+
+
+class _EssenceFsOpenerAdapter(Opener):
+    """
+    An adapter allowing PyFileSystem to use the EssenceFS Registry
+
+    Required for PyFilesystem to use non-entrypoint plugins
+    (I.E. Plugins registered manually)
+
+    PyFileSystem expects a subclass of Opener, not an instance of Opener
+    This adapter allows PyFileSystem to create a new opener, while using the global opener instance under the hood
+    """
+
+    # Python 3.13 deprecated classmethod property chaining
+    # Python 3.9 doesn't have __wrapped__
+    # Bite the bullet and just copy the list, if this becomes a problem, then it'll come at the cost of dropping Py3.9
+    protocols = registry.protocols
+
+    def open_fs(
+        self,
+        fs_url: str,
+        parse_result: ParseResult,
+        writeable: bool,
+        create: bool,
+        cwd: str,
+    ) -> EssenceFS:
+        return registry.open_fs(fs_url, parse_result, writeable, create, cwd)
+
 
 open_sga = registry.open_fs

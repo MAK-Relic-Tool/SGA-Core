@@ -4,11 +4,12 @@ import pytest
 
 from relic.sga.core.definitions import Version
 
-# Chunky versions start at 1
-# Max i've seen is probably 16ish?
-# Minor has a lot mor variety than Chunky; so we test a bit more
-_VERSION_MAJORS = range(1, 11)  # So far we only go up to V10
+# We test 3 of the 11 possible known versions (Allegedly, 4.1 is the only x.1 version)
+# We test 4 of the 20 possible permutations of known values
+_VERSION_MAJORS = range(1, 3)  # Known SGAs go to V10
 _VERSION_MINORS = [0, 1]  # Allegedly CoHO was v4.1 so... we do 0,1
+# We test version comparison as the product of all combinations, previously this was 20, resulting in 400 checks
+# Now we test 4, resulting in 16 checks
 
 
 _VERSION_ARGS = list(itertools.product(_VERSION_MAJORS, _VERSION_MINORS))
@@ -86,3 +87,23 @@ class TestVersion:
         result = this != other
         expected = TestVersion.neq(this, other)
         assert result == expected
+
+    def test_str(self, this):
+        expected = f"Version {this.major}.{this.minor}"
+        result = str(this)
+        assert result == expected
+
+    def test_get_item_major(self, this):
+        result = this[0]
+        expected = this.major
+        assert result == expected
+
+    def test_get_item_minor(self, this):
+        result = this[1]
+        expected = this.minor
+        assert result == expected
+
+    def test_hash(self, this):
+        # Simply test that it is an int and that it does not raise an exception
+        result = hash(this)
+        assert isinstance(result, int)
