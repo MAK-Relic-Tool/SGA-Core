@@ -39,12 +39,9 @@ def handle_version_not_supported_error(
     logger: logging.Logger, src: str, err: VersionNotSupportedError
 ) -> None:
     logger.debug(err, exc_info=True)
-    logger.info(
-        BraceMessage(
-            "Failed to open SGA File '{0}', no plugin for '{1}'", src, err.received
-        )
-    )
-    logger.info("Found SGA Plugins:")
+    logger.info(BraceMessage("Failed to open '{0}'", src))
+    logger.info(BraceMessage("No SGA plugin found for '{0}'", err.received))
+    logger.info("SGA Plugins:")
     for plugin in err.allowed:
         logger.info(BraceMessage("\t{0}", plugin))
     if len(err.allowed) == 0:
@@ -55,12 +52,25 @@ def handle_sga_magic_mismatch_error(
     logger: logging.Logger, src: str, err: MagicMismatchError
 ) -> None:
     logger.debug(err, exc_info=True)
-    logger.info(BraceMessage("Failed to open SGA File '{0}'; file is not an SGA'", src))
+    logger.info(BraceMessage("Failed to open '{0}'", src))
+    logger.info("File is not an SGA")
+
+    class PrettyBytesRepr:
+        def __init__(self, v: bytes):
+            self.v = v
+
+        def __str__(self):
+            return repr(self.v)[2:-1]  # trim b'' out of string
+
+        def __repr__(self):
+            return str(self)
+
     logger.info(
         BraceMessage(
-            "SGA Files begin with '{0}' but the given file begins with '{1}'",
-            err.expected,
-            err.received,
+            "Expected first {1} bytes to be '{0}', got '{2}'",
+            PrettyBytesRepr(err.expected),
+            len(err.expected),
+            PrettyBytesRepr(err.received),
         )
     )
 
