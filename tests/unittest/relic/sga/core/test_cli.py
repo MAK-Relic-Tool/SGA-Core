@@ -5,7 +5,7 @@ import os
 import random
 from io import StringIO
 from tempfile import TemporaryDirectory
-from typing import Optional
+from typing import Optional, Union
 from typing import Type, Any
 
 import pytest
@@ -39,7 +39,7 @@ from tests.util import TempFileHandle
     ],
 )
 @pytest.mark.parametrize("parent", [True, False])
-def test_init_cli(cli: Type[CliPlugin | CliPluginGroup], parent: bool):
+def test_init_cli(cli: Union[Type[CliPlugin], Type[CliPluginGroup]], parent: bool):
     parent_parser: Optional[Any] = None
     if parent:
         parent_parser = argparse.ArgumentParser().add_subparsers()
