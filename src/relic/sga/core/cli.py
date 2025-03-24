@@ -8,7 +8,7 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 from json import JSONEncoder
 from logging import Logger
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Generator
 
 import relic.core.cli
 from fs import open_fs
@@ -26,8 +26,62 @@ from relic.core.cli import (
     get_dir_type_validator,
     get_path_validator,
 )
+from relic.core.errors import MagicMismatchError
+from relic.sga.core.errors import VersionNotSupportedError
+from contextlib import contextmanager
 
 _SUCCESS = 0
+_SGA_NOT_SUPPORTED = 1
+_FILE_NOT_SGA = 2
+
+
+def handle_version_not_supported_error(
+    logger: logging.Logger, src: str, err: VersionNotSupportedError
+) -> None:
+    logger.debug(err, exc_info=True)
+    logger.info(
+        BraceMessage(
+            "Failed to open SGA File '{0}', no plugin for '{1}'", src, err.received
+        )
+    )
+    logger.info("Found SGA Plugins:")
+    for plugin in err.allowed:
+        logger.info(BraceMessage("\t{0}", plugin))
+    if len(err.allowed) == 0:
+        logger.info("\tNone Found")
+
+
+def handle_sga_magic_mismatch_error(
+    logger: logging.Logger, src: str, err: MagicMismatchError
+) -> None:
+    logger.debug(err, exc_info=True)
+    logger.info(BraceMessage("Failed to open SGA File '{0}'; file is not an SGA'", src))
+    logger.info(
+        BraceMessage(
+            "SGA Files begin with '{0}' but the given file begins with '{1}'",
+            err.expected,
+            err.received,
+        )
+    )
+
+
+@contextmanager
+def cli_open_sga(
+    src: str, logger: logging.Logger, *, default_protocol: str = "sga"
+) -> Generator[EssenceFS, None, None]:
+    # Exception will cause a SystemExit:
+    # run will cause the program to close
+    # run_with will capture status code and continute
+    try:
+        with open_fs(src, default_protocol=default_protocol) as sga:
+            yield sga  # type: ignore
+    except VersionNotSupportedError as not_supported_error:
+        handle_version_not_supported_error(logger, src, not_supported_error)
+
+        raise SystemExit(_SGA_NOT_SUPPORTED) from not_supported_error
+    except MagicMismatchError as mismatch_error:
+        handle_sga_magic_mismatch_error(logger, src, mismatch_error)
+        raise SystemExit(_FILE_NOT_SGA) from mismatch_error
 
 
 class RelicSgaCli(CliPluginGroup):
@@ -101,8 +155,7 @@ class RelicSgaUnpackCli(CliPlugin):
             logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
-        sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
+        with cli_open_sga(infile, logger=logger) as sga:
             roots = list(sga.iterate_fs())
             # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
             if merge or (not isolate and len(roots) == 1):
@@ -116,8 +169,7 @@ class RelicSgaUnpackCli(CliPlugin):
                         copy_fs(
                             subfs, osfs_subfs, on_copy=_callback, preserve_time=True
                         )
-
-        return _SUCCESS
+            return _SUCCESS
 
 
 class EssenceInfoEncoder(JSONEncoder):
@@ -176,8 +228,7 @@ class RelicSgaInfoCli(CliPlugin):
         logger.info(f"Reading Info `{infile}`")
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
-        sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
+        with cli_open_sga(infile, logger=logger) as sga:
             info = sga.info_tree()
 
             outjson_dir, outjson_file = os.path.split(outjson)
@@ -225,8 +276,7 @@ class RelicSgaTreeCli(CliPlugin):
         logger.info(BraceMessage("Printing Tree `{0}`", infile))
 
         # we need to open the archive to 'isolate' or to determine if we implicit merge
-        sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
+        with cli_open_sga(infile, logger=logger) as sga:
             with StringIO() as writer:
                 sga.tree(file=writer, with_color=True, dirs_first=True)
                 writer.seek(0)

@@ -21,9 +21,20 @@ from relic.sga.core.cli import (
     RelicSgaVersionCli,
     RelicSgaListCli,
     EssenceInfoEncoder,
+    _SGA_NOT_SUPPORTED,
+    cli_open_sga,
+    handle_version_not_supported_error,
+    _FILE_NOT_SGA,
 )
+from relic.sga.core.errors import VersionNotSupportedError
+from relic.sga.core.essencefs import EssenceFsOpener
 from relic.sga.core.serialization import VersionSerializer
-from tests.dummy_essencefs import write_random_essencefs, register_randomfs_opener
+from tests.dummy_essencefs import (
+    write_random_essencefs,
+    register_randomfs_opener,
+    RandomEssenceFS,
+    RandomEssenceFsOpener,
+)
 from tests.util import TempFileHandle
 
 
@@ -212,3 +223,46 @@ def test_info_encoder_nondclass():
     result = enc.default(inst)
     expected = str(inst)
     assert result == expected
+
+
+@pytest.mark.parametrize("version", [Version(1, 1)])
+@pytest.mark.parametrize("install_randomfs", [True, False])
+def test_unsupported_sga(version: Version, install_randomfs: bool):
+    registry = EssenceFsOpener()
+    if install_randomfs:
+        registry.register(Version(0, 0), RandomEssenceFsOpener)
+    with TempFileHandle(".sga") as h:
+        with h.open("wb") as w:
+            MAGIC_WORD.write(w)
+            VersionSerializer.write(w, version)
+
+        result = CLI.run_with("relic", "sga", "tree", h.path)
+        assert result == _SGA_NOT_SUPPORTED
+
+
+def test_bad_sga_magic():
+    with TempFileHandle(".sga") as h:
+        with h.open("wb") as w:
+            w.write(b"deadbeefxoxo")
+
+        result = CLI.run_with("relic", "sga", "tree", h.path)
+        assert result == _FILE_NOT_SGA
+
+
+@pytest.mark.parametrize("allowed", range(2))
+def test_handle_version_not_supported_error(allowed: int) -> None:
+    logger = logging.getLogger("test_handle_version_not_supported_error")
+    with StringIO() as stream:
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        versions = [Version(_) for _ in range(allowed)]
+        handle_version_not_supported_error(
+            logger, "fake", VersionNotSupportedError(Version(-1), versions)
+        )
+        text = stream.getvalue()
+        if allowed == 0:
+            assert "None Found" in text
+        else:
+            assert "None Found" not in text
