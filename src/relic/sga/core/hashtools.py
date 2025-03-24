@@ -4,7 +4,7 @@ import zlib
 from typing import BinaryIO, Optional, Generic, TypeVar, Type, Union, Protocol
 
 from relic.core.lazyio import read_chunks
-
+from relic.core.logmsg import BraceMessage
 from relic.sga.core.errors import (
     HashMismatchError,
     Md5MismatchError,
@@ -41,10 +41,13 @@ class Hasher(Generic[_T]):
         self._default_err_cls = default_err_cls
         self._hash_func = hash_func
         if hasattr(self, "__name__"):
+
             logging.warning(
-                "Hasher already has __name__ dunder, overwriting '%s' with '%s'",
-                self.__name__,
-                self._hasher_name,
+                BraceMessage(
+                    "Hasher already has __name__ dunder, overwriting '{0}' with '{1}'",
+                    str(self.__name__),  # type: ignore # pylint: disable=E0203
+                    self._hasher_name,
+                )
             )  # pragma: nocover
         self.__name__ = self._hasher_name
 

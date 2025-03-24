@@ -2,21 +2,11 @@ from __future__ import annotations
 
 import os
 from os.path import expanduser
-from typing import (
-    Dict,
-    Optional,
-    Protocol,
-    BinaryIO,
-    TypeVar,
-    List,
-    Iterable,
-    Union,
-    Type,
-)
+from typing import Protocol, BinaryIO, TypeVar, List, Iterable, Union, Type
 
 import fs.opener
 from fs.opener import Opener
-from fs.opener.errors import OpenerError
+
 from fs.opener.parse import ParseResult
 from relic.core.errors import RelicToolError
 from relic.core.lazyio import BinaryProxy, get_proxy
@@ -128,7 +118,7 @@ class EssenceFsOpener(
                 major, minor = key.split(".")
                 return Version(int(major[1:]), int(minor))
 
-            supported_versions = [_key2version(key) for key in self.keys()]
+            supported_versions = [_key2version(key) for key in self._backing.keys()]
             raise VersionNotSupportedError(version, supported_versions) from e
 
         if isinstance(opener, type):
@@ -151,12 +141,19 @@ class _EssenceFsOpenerAdapter(Opener):
     This adapter allows PyFileSystem to create a new opener, while using the global opener instance under the hood
     """
 
-    @classmethod
-    @property
-    def protocols(cls) -> List[str]:
-        return registry.protocols
+    # Python 3.13 deprecated classmethod property chaining
+    # Python 3.9 doesn't have __wrapped__
+    # Bite the bullet and just copy the list, if this becomes a problem, then it'll come at the cost of dropping Py3.9
+    protocols = registry.protocols
 
-    def open_fs(self, fs_url, parse_result, writeable, create, cwd):
+    def open_fs(
+        self,
+        fs_url: str,
+        parse_result: ParseResult,
+        writeable: bool,
+        create: bool,
+        cwd: str,
+    ) -> EssenceFS:
         return registry.open_fs(fs_url, parse_result, writeable, create, cwd)
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import dataclasses
 import json
 import logging
@@ -9,7 +8,7 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 from json import JSONEncoder
 from logging import Logger
-from typing import Optional, Callable, Any, Dict
+from typing import Optional, Any, Dict
 
 import relic.core.cli
 from fs import open_fs
