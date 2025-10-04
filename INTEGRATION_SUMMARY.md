@@ -1,4 +1,4 @@
-# 🚀 Ultra-Fast SGA Extraction - Seamless CLI Integration
+# 🚀 Fast SGA Extraction - Seamless CLI Integration
 
 ## Overview
 
@@ -8,10 +8,10 @@ Ultra-fast native SGA extraction has been **seamlessly integrated** into the sta
 
 ## 🎯 Key Changes
 
-### **1. Default Behavior (ULTRA-FAST)**
+### **1. Default Behavior (FAST)**
 
 ```bash
-# This command now uses ultra-fast extraction by default!
+# This command now uses fast extraction by default!
 relic sga unpack archive.sga ./output
 
 # Result: 3-4 seconds instead of 300+ seconds (86x faster!)
@@ -29,7 +29,7 @@ relic sga unpack archive.sga ./output
 #### **`--compatible`**
 
 - Fallback to fs-based extraction
-- Use if ultra-fast mode has issues
+- Use if fast mode has issues
 - Original slower method for compatibility
 
 #### **`--workers N`**
@@ -44,7 +44,7 @@ relic sga unpack archive.sga ./output
 
 | Mode | Command | Time | Speed | Use Case |
 |------|---------|------|-------|----------|
-| **Ultra-Fast (NEW DEFAULT)** | `relic sga unpack file.sga out/` | **3.5s** | **2,248 files/s** | Production use |
+| **Fast (NEW DEFAULT)** | `relic sga unpack file.sga out/` | **3.5s** | **2,248 files/s** | Production use |
 | Compatible (Legacy) | `relic sga unpack file.sga out/ --compatible` | 300s | 26 files/s | Compatibility |
 
 **Performance Gain: 86x faster!** 🚀
@@ -56,7 +56,7 @@ relic sga unpack archive.sga ./output
 ### **Standard Extraction (Ultra-Fast by Default)**
 
 ```bash
-# Automatically uses ultra-fast extraction
+# Automatically uses fast extraction
 relic sga unpack archive.sga ./output
 ```
 
@@ -77,10 +77,10 @@ relic sga unpack archive.sga ./output --compatible
 ### **Merge/Isolate Options (Still Work)**
 
 ```bash
-# Merge all drives into single directory (ultra-fast!)
+# Merge all drives into single directory (fast!)
 relic sga unpack archive.sga ./output --merge
 
-# Isolate drives into separate directories (ultra-fast!)
+# Isolate drives into separate directories (fast!)
 relic sga unpack archive.sga ./output --isolate
 ```
 
@@ -104,9 +104,9 @@ from relic.sga.core.parallel_advanced import AdvancedParallelUnpacker
 unpacker = AdvancedParallelUnpacker(num_workers=4)
 stats = unpacker.extract_streaming(sga_path, output_dir)
 
-# Ultra-fast extraction (86x faster!)
+# Fast extraction (86x faster!)
 unpacker = AdvancedParallelUnpacker(num_workers=15)
-stats = unpacker.extract_native_ultra_fast(sga_path, output_dir)
+stats = unpacker.extract_native_fast(sga_path, output_dir)
 ```
 
 ---
@@ -126,7 +126,7 @@ stats = unpacker.extract_native_ultra_fast(sga_path, output_dir)
    - Parallel disk writes with low-level `os.write()`
 
 3. **CLI Integration** (`cli.py`)
-   - Ultra-fast mode enabled by default
+   - Fast mode enabled by default
    - Automatic fallback to compatible mode on error
    - Progress logging every 500 files
 
@@ -136,8 +136,8 @@ stats = unpacker.extract_native_ultra_fast(sga_path, output_dir)
 # Automatic fallback on error
 if use_fast:
     try:
-        # Use ultra-fast extraction
-        stats = unpacker.extract_native_ultra_fast(...)
+        # Use fast extraction
+        stats = unpacker.extract_native_fast(...)
     except Exception as e:
         logger.warning(f"Fast extraction failed: {e}")
         logger.info("Falling back to compatible mode...")
@@ -150,9 +150,7 @@ if not use_fast:
 
 - `src/relic/sga/core/cli.py` - Integrated ultra-fast extraction into CLI
 - `.gitignore` - Excluded test data
-
 ---
-{{ ... }}
 
 ## ✅ Testing
 
@@ -165,7 +163,7 @@ if not use_fast:
 ✅ Argument '--fast' available
 ✅ Argument '--compatible' available
 ✅ Argument '--workers' available
-✅ Ultra-fast method available
+✅ Fast method available
 ✅ Extraction successful (7,815 files)
 ```
 
@@ -174,7 +172,7 @@ if not use_fast:
 ```bash
 ✅ Old imports still work
 ✅ Old methods still available
-✅ New ultra-fast method available
+✅ New fast method available
 ✅ No breaking changes
 ```
 
@@ -195,7 +193,7 @@ Done!
 
 ```bash
 $ relic sga unpack W40kData.sga ./output
-Using ultra-fast native extraction (15 workers)
+Using fast native extraction (15 workers)
 Parsing SGA binary format...
 Parsed 7,815 files in 0.35s
 Creating directory structure...
@@ -213,7 +211,7 @@ Done in 3.5 seconds!
 
 ### **What Changed**
 
-- ✅ Ultra-fast extraction is now the **DEFAULT**
+- ✅ Fast extraction is now the **DEFAULT**
 - ✅ **Zero breaking changes** - everything backwards compatible
 - ✅ Users get **86x speedup automatically**
 - ✅ Automatic fallback to compatible mode if needed
@@ -234,4 +232,4 @@ Done in 3.5 seconds!
 
 ---
 
-**The ultra-fast extraction is now fully integrated and ready for production use!** ✨
+**The fast extraction is now fully integrated and ready for production use!** ✨
