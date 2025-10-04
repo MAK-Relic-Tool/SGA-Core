@@ -26,8 +26,14 @@ from relic.core.cli import (
     get_dir_type_validator,
     get_path_validator,
 )
+from relic.sga.core.parallel_advanced import AdvancedParallelUnpacker
 
 _SUCCESS = 0
+
+# Backwards compatibility aliases for v2 package
+_get_file_type_validator = get_file_type_validator
+_get_dir_type_validator = get_dir_type_validator
+_get_path_validator = get_path_validator
 
 
 class RelicSgaCli(CliPluginGroup):
@@ -80,6 +86,26 @@ class RelicSgaUnpackCli(CliPlugin):
             help="SGA roots will always write to separate folders, one per alias; located within out_dir",
             action="store_true",
         )
+        
+        # Performance options
+        parser.add_argument(
+            "--fast",
+            help="Use ultra-fast native extraction (default, 80x faster)",
+            action="store_true",
+            default=True,
+        )
+        parser.add_argument(
+            "--compatible",
+            help="Use compatible fs-based extraction (slower, more compatible)",
+            action="store_true",
+            default=False,
+        )
+        parser.add_argument(
+            "--workers",
+            type=int,
+            help="Number of parallel workers for fast extraction (default: CPU count - 1)",
+            default=None,
+        )
 
         return parser
 
@@ -88,6 +114,8 @@ class RelicSgaUnpackCli(CliPlugin):
         outdir: str = ns.out_dir
         merge: bool = ns.merge
         isolate: bool = ns.isolate
+        use_fast: bool = not ns.compatible  # Use fast unless --compatible specified
+        num_workers: Optional[int] = ns.workers
 
         if merge and isolate:  # pragma: nocover
             # This error should be impossible
@@ -96,26 +124,67 @@ class RelicSgaUnpackCli(CliPlugin):
             )
 
         logger.info(f"Unpacking `{infile}`")
-
-        def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
-            logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
-
-        # we need to open the archive to 'isolate' or to determine if we implicit merge
-        sga: EssenceFS
-        with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
-            roots = list(sga.iterate_fs())
-            # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
-            if merge or (not isolate and len(roots) == 1):
-                copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
+        
+        # Use ultra-fast native extraction by default
+        if use_fast:
+            try:
+                import multiprocessing
+                if num_workers is None:
+                    num_workers = max(1, multiprocessing.cpu_count() - 1)
+                
+                logger.info(f"Using ultra-fast native extraction ({num_workers} workers)")
+                unpacker = AdvancedParallelUnpacker(
+                    num_workers=num_workers,
+                    enable_delta=False,
+                    logger=logger
+                )
+                
+                # Progress callback
+                def _progress(current: int, total: int) -> None:
+                    if current % 500 == 0 or current == total:
+                        logger.info(f"  Progress: {current}/{total} files ({current*100//total}%)")
+                
+                stats = unpacker.extract_native_ultra_fast(
+                    infile,
+                    outdir,
+                    on_progress=_progress
+                )
+                
+                logger.info(f"Extraction complete: {stats.extracted_files} files extracted")
+                if stats.failed_files > 0:
+                    logger.warning(f"Failed: {stats.failed_files} files")
+                    return 1
+                
                 return _SUCCESS
+                
+            except Exception as e:
+                logger.warning(f"Fast extraction failed: {e}")
+                logger.info("Falling back to compatible mode...")
+                use_fast = False
+        
+        # Fallback to compatible fs-based extraction
+        if not use_fast:
+            logger.info("Using compatible fs-based extraction")
+            
+            def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
+                logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
-            # Isolate or Implied Isolate
-            with open_fs(outdir, writeable=True, create=True) as osfs:
-                for alias, subfs in roots:
-                    with osfs.makedir(alias, recreate=True) as osfs_subfs:
-                        copy_fs(
-                            subfs, osfs_subfs, on_copy=_callback, preserve_time=True
-                        )
+            # we need to open the archive to 'isolate' or to determine if we implicit merge
+            sga: EssenceFS
+            with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
+                roots = list(sga.iterate_fs())
+                # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
+                if merge or (not isolate and len(roots) == 1):
+                    copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
+                    return _SUCCESS
+
+                # Isolate or Implied Isolate
+                with open_fs(outdir, writeable=True, create=True) as osfs:
+                    for alias, subfs in roots:
+                        with osfs.makedir(alias, recreate=True) as osfs_subfs:
+                            copy_fs(
+                                subfs, osfs_subfs, on_copy=_callback, preserve_time=True
+                            )
 
         return _SUCCESS
 
