@@ -90,7 +90,7 @@ class RelicSgaUnpackCli(CliPlugin):
         # Performance options
         parser.add_argument(
             "--fast",
-            help="Use ultra-fast native extraction (default, 80x faster)",
+            help="Use Fast native extraction (default, 80x faster)",
             action="store_true",
             default=True,
         )
@@ -125,14 +125,14 @@ class RelicSgaUnpackCli(CliPlugin):
 
         logger.info(f"Unpacking `{infile}`")
         
-        # Use ultra-fast native extraction by default
+        # Use Fast native extraction by default
         if use_fast:
             try:
                 import multiprocessing
                 if num_workers is None:
                     num_workers = max(1, multiprocessing.cpu_count() - 1)
                 
-                logger.info(f"Using ultra-fast native extraction ({num_workers} workers)")
+                logger.info(f"Using Fast native extraction ({num_workers} workers)")
                 unpacker = AdvancedParallelUnpacker(
                     num_workers=num_workers,
                     enable_delta=False,
@@ -144,7 +144,7 @@ class RelicSgaUnpackCli(CliPlugin):
                     if current % 500 == 0 or current == total:
                         logger.info(f"  Progress: {current}/{total} files ({current*100//total}%)")
                 
-                stats = unpacker.extract_native_ultra_fast(
+                stats = unpacker.extract_native_fast(
                     infile,
                     outdir,
                     on_progress=_progress
