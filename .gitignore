@@ -27,3 +27,8 @@ docs/source/generated/**
 # Ignore local builds
 build/**
 .coverage
+
+# Ignore test data files
+test/
+examples/*_output/
+examples/ultra_fast_extraction_demo.py
