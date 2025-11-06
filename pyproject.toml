@@ -6,11 +6,11 @@ requires = ["setuptools>=61.2"]
 authors = [{name = "Marcus Kertesz"}]
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Typing :: Typed",
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)"
 ]
@@ -21,7 +21,7 @@ dependencies = [
 description = "Core files shared by versioned SGA files."
 dynamic = ["version"]
 name = "relic-tool-sga-core"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 [project.entry-points]
 "relic.cli" = {sga = "relic.sga.core.cli:RelicSgaCli"}
