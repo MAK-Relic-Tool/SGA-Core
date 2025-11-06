@@ -86,7 +86,7 @@ class RelicSgaUnpackCli(CliPlugin):
             help="SGA roots will always write to separate folders, one per alias; located within out_dir",
             action="store_true",
         )
-        
+
         # Performance options
         parser.add_argument(
             "--fast",
@@ -124,48 +124,49 @@ class RelicSgaUnpackCli(CliPlugin):
             )
 
         logger.info(f"Unpacking `{infile}`")
-        
+
         # Use Fast native extraction by default
         if use_fast:
             try:
                 import multiprocessing
+
                 if num_workers is None:
                     num_workers = max(1, multiprocessing.cpu_count() - 1)
-                
+
                 logger.info(f"Using Fast native extraction ({num_workers} workers)")
                 unpacker = AdvancedParallelUnpacker(
-                    num_workers=num_workers,
-                    enable_delta=False,
-                    logger=logger
+                    num_workers=num_workers, enable_delta=False, logger=logger
                 )
-                
+
                 # Progress callback
                 def _progress(current: int, total: int) -> None:
                     if current % 500 == 0 or current == total:
-                        logger.info(f"  Progress: {current}/{total} files ({current*100//total}%)")
-                
-                stats = unpacker.extract_native_fast(
-                    infile,
-                    outdir,
-                    on_progress=_progress
+                        logger.info(
+                            f"  Progress: {current}/{total} files ({current*100//total}%)"
+                        )
+
+                stats = unpacker.extract_native_ultra_fast(
+                    infile, outdir, on_progress=_progress
                 )
-                
-                logger.info(f"Extraction complete: {stats.extracted_files} files extracted")
+
+                logger.info(
+                    f"Extraction complete: {stats.extracted_files} files extracted"
+                )
                 if stats.failed_files > 0:
                     logger.warning(f"Failed: {stats.failed_files} files")
                     return 1
-                
+
                 return _SUCCESS
-                
+
             except Exception as e:
                 logger.warning(f"Fast extraction failed: {e}")
                 logger.info("Falling back to compatible mode...")
                 use_fast = False
-        
+
         # Fallback to compatible fs-based extraction
         if not use_fast:
             logger.info("Using compatible fs-based extraction")
-            
+
             def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
                 logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
 
@@ -175,7 +176,9 @@ class RelicSgaUnpackCli(CliPlugin):
                 roots = list(sga.iterate_fs())
                 # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
                 if merge or (not isolate and len(roots) == 1):
-                    copy_fs(sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True)
+                    copy_fs(
+                        sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True
+                    )
                     return _SUCCESS
 
                 # Isolate or Implied Isolate
