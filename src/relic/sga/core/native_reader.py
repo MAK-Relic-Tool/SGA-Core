@@ -11,16 +11,15 @@ from __future__ import annotations
 import mmap
 import os
 import struct
-import sys
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional, Literal
 
-if sys.platform == "win32":  # mypy *ONLY* checks for win32; as specified in pep0484
-    _RB_FLAG = os.O_RDONLY | os.O_BINARY
-else:
-    _RB_FLAG = os.O_RDONLY
+# mypy hack; it's not respecting 'sys.platform == "win32"'
+_RB_FLAG = os.O_RDONLY
+if hasattr(os,"O_BINARY"):
+    _RB_FLAG |= getattr(os,"O_BINARY")
 
 
 @dataclass(slots=True)
