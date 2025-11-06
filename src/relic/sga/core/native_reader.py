@@ -272,7 +272,9 @@ class NativeSGAReader:
     def open_mmap(self) -> None:
         """Open memory-mapped access."""
         if self._mmap_handle is None:
-            self._file_handle = os.open(self.sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY)
+            self._file_handle = os.open(
+                self.sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
+            )
             self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
 
     def close_mmap(self) -> None:

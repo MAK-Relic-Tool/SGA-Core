@@ -767,7 +767,7 @@ class AdvancedParallelUnpacker:
             total_read_time: float = 0
             total_queue_time: float = 0
             files_read: int = 0
-
+            sga_open_time: float = 0
             try:
                 t_open_sga = time_module.perf_counter()
                 with open_fs(sga_path, default_protocol="sga") as sga:
@@ -873,7 +873,11 @@ class AdvancedParallelUnpacker:
                     # Skip directory check - already pre-created!
 
                     # Use os.write() for maximum speed (no Python buffering overhead)
-                    fd = os.open(dst_path, OSFlags.O_WRONLY | OSFlags.O_CREAT | OSFlags.O_TRUNC, 0o644)
+                    fd = os.open(
+                        dst_path,
+                        OSFlags.O_WRONLY | OSFlags.O_CREAT | OSFlags.O_TRUNC,
+                        0o644,
+                    )
                     try:
                         os.write(fd, data)  # type: ignore
                         # Skip fsync for MAXIMUM SPEED (trades safety for performance)
@@ -1088,7 +1092,10 @@ class AdvancedParallelUnpacker:
 
                         # Write to disk
                         dst_path = Path(output_dir) / file_path.lstrip("/")
-                        fd = os.open(dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY)
+                        fd = os.open(
+                            dst_path,
+                            OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
+                        )
                         os.write(fd, data)
                         os.close(fd)
 
@@ -1287,7 +1294,9 @@ class AdvancedParallelUnpacker:
                 try:
                     dst_path = Path(output_dir) / file_path.lstrip("/")
 
-                    fd = os.open(dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY)
+                    fd = os.open(
+                        dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY
+                    )
                     os.write(fd, data)  # type: ignore
                     os.close(fd)
 
@@ -1421,7 +1430,11 @@ class AdvancedParallelUnpacker:
             try:
                 dst_path = Path(output_dir) / path.lstrip("/")
                 fd = os.open(
-                    dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY | OSFlags.O_TRUNC
+                    dst_path,
+                    OSFlags.O_CREAT
+                    | OSFlags.O_WRONLY
+                    | OSFlags.O_BINARY
+                    | OSFlags.O_TRUNC,
                 )
                 os.write(fd, data)
                 os.close(fd)
