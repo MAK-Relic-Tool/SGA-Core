@@ -11,10 +11,16 @@ from __future__ import annotations
 import mmap
 import os
 import struct
+import sys
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional, Literal
+
+if sys.platform == "nt":
+    _RB_FLAG = (os.O_RDONLY | os.O_BINARY)
+else:
+    _RB_FLAG = os.O_RDONLY
 
 
 @dataclass(slots=True)
@@ -269,7 +275,7 @@ class NativeSGAReader:
     def open_mmap(self) -> None:
         """Open memory-mapped access."""
         if self._mmap_handle is None:
-            self._file_handle = os.open(self.sga_path, os.O_RDONLY | os.O_BINARY)
+            self._file_handle = os.open(self.sga_path, _RB_FLAG)
             self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
 
     def close_mmap(self) -> None:
