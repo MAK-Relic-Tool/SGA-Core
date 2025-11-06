@@ -1287,7 +1287,7 @@ class AdvancedParallelUnpacker:
                 try:
                     dst_path = Path(output_dir) / file_path.lstrip("/")
 
-                    fd = os.open(dst_path, os.O_CREAT | os.O_WRONLY | os.O_BINARY)
+                    fd = os.open(dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY)
                     os.write(fd, data)  # type: ignore
                     os.close(fd)
 
