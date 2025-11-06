@@ -17,8 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional, Literal
 
-if sys.platform == "nt":
-    _RB_FLAG = (os.O_RDONLY | os.O_BINARY)
+if sys.platform == "win32":  # mypy *ONLY* checks for win32; as specified in pep0484
+    _RB_FLAG = os.O_RDONLY | os.O_BINARY
 else:
     _RB_FLAG = os.O_RDONLY
 
