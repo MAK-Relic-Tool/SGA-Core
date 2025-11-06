@@ -16,7 +16,7 @@ MAGIC_WORD = MagicWord(b"_ARCHIVE", name="SGA Magic Word")
 # Safe os.O_FLAGS
 # will fail for (value & flag) == flag; but will not interfere with (value | flag) use-cases
 
-_T = TypeVar("T")
+_T = TypeVar("_T")
 def _has_get_attr(o:Any,name:str,default:_T) -> _T:
     if hasattr(o,name):
         return getattr(o,name) # type: ignore
@@ -27,11 +27,11 @@ def _has_get_attr(o:Any,name:str,default:_T) -> _T:
 #  TODO; instead of working around the problem by using dummy flags; fix opens so that they are platform agnostic
 # May already be mostly agnostic; docs say some constants are for unix/windows; but they may be lumping macos in with unix; meaning ONLY O_BINARY is the problem
 class OSFlags(IntFlag):
-    O_BINARY:int = _has_get_attr(os,"O_BINARY", 0) # win only
-    O_CREAT:int = _has_get_attr(os,"O_CREAT",0) # win/unix (macos?)
-    O_RDONLY:int = _has_get_attr(os,"O_RDONLY",0) # win/unix (macos?)
-    O_WRONLY:int = _has_get_attr(os,"O_WRONLY",0) # win/unix (macos?)
-    O_TRUNC:int = _has_get_attr(os,"O_TRUNC",0) # win/unix (macos?)
+    O_BINARY = _has_get_attr(os,"O_BINARY", 0) # win only
+    O_CREAT = _has_get_attr(os,"O_CREAT",0) # win/unix (macos?)
+    O_RDONLY = _has_get_attr(os,"O_RDONLY",0) # win/unix (macos?)
+    O_WRONLY = _has_get_attr(os,"O_WRONLY",0) # win/unix (macos?)
+    O_TRUNC = _has_get_attr(os,"O_TRUNC",0) # win/unix (macos?)
 
 @dataclass
 @total_ordering
@@ -99,5 +99,5 @@ class VerificationType(
     SHA1_BLOCKS = 4  # unknown real values, assuming incremental
 
 
-__all__ = ["MAGIC_WORD", "Version", "StorageType", "VerificationType", "SAFE_O_BIANRY_FLAG"]
+__all__ = ["MAGIC_WORD", "Version", "StorageType", "VerificationType", "OSFlags"]
 
