@@ -33,3 +33,4 @@ jobs:
     with:
       package: relic.sga.core
       test-path: ./tests
+      mypy_runners: '["ubuntu-latest", "windows-latest", "macos-latest"]'

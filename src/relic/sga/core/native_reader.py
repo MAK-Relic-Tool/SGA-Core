@@ -11,15 +11,13 @@ from __future__ import annotations
 import mmap
 import os
 import struct
+import sys
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional, Literal
 
-# mypy hack; it's not respecting 'sys.platform == "win32"'
-_RB_FLAG = os.O_RDONLY
-if hasattr(os,"O_BINARY"):
-    _RB_FLAG |= getattr(os,"O_BINARY")
+from relic.sga.core.definitions import OSFlags
 
 
 @dataclass(slots=True)
@@ -274,7 +272,7 @@ class NativeSGAReader:
     def open_mmap(self) -> None:
         """Open memory-mapped access."""
         if self._mmap_handle is None:
-            self._file_handle = os.open(self.sga_path, _RB_FLAG)
+            self._file_handle = os.open(self.sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY)
             self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
 
     def close_mmap(self) -> None:
