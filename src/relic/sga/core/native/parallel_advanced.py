@@ -18,6 +18,7 @@ import logging
 import multiprocessing
 import os
 import threading
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 from pathlib import Path
@@ -388,6 +389,198 @@ class AdvancedParallelUnpacker:
         # Final progress callback
         if on_progress:
             on_progress(total_processed, self.stats.total_files)
+
+        # Summary
+        self.logger.info("Extraction complete!")
+        self.logger.info(f"  Total:      {self.stats.total_files}")
+        self.logger.info(f"  Successful: {self.stats.extracted_files}")
+        self.logger.info(f"  Failed:     {self.stats.failed_files}")
+        self.logger.info(
+            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
+        )
+
+        return self.stats
+
+    def extract_streaming_native(
+        self,
+        sga_path: str,
+        output_dir: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> ExtractionStats:
+        """PHASE 2: Multi-reader streaming with thread-local SGA handles.
+
+        Architecture:
+        - MULTIPLE READERS: Each with thread-local SGA handle (no lock contention!)
+        - Uses NativeSGAReader for thread-safe parallel reading
+        - Massive memory buffer for smooth flow
+        - All optimizations from Phase 1
+
+        Expected: 2-3x faster than single-reader streaming!
+        """
+        self.logger.info(f"Starting NATIVE MULTI-READER extraction: {sga_path}")
+        self.stats = ExtractionStats()
+
+        # Get file list using native reader
+        self.logger.info("Collecting file paths...")
+        entries =  NativeParserV2(sga_path).parse()
+
+        self.stats.total_files = len(entries)
+        self.logger.info(f"Found {len(entries)} files")
+
+        # PRE-CREATE ALL DIRECTORIES
+        self.logger.info("Pre-creating directory structure...")
+        unique_dirs = set()
+        for file_path in entries:
+            dst_path = Path(output_dir) / file_path.path.lstrip("/")
+            unique_dirs.add(dst_path.parent)
+
+        for dir_path in unique_dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
+
+        self.logger.info(f"Created {len(unique_dirs)} directories")
+
+        # DISABLE GC
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        self.logger.info("Disabled GC for maximum speed")
+
+        # MULTI-READER with thread-local handles!
+        num_readers = min(5, max(2, self.num_workers // 3))  # 5 readers for 15 workers
+        num_writers = self.num_workers - num_readers
+
+        self.logger.info(
+            f"Using {num_readers} readers (thread-local) + {num_writers} writers"
+        )
+
+        # Split files among readers
+        files_per_reader = len(entries) // num_readers
+        reader_file_lists = []
+        for i in range(num_readers):
+            start = i * files_per_reader
+            end = start + files_per_reader if i < num_readers - 1 else len(entries)
+            reader_file_lists.append(entries[start:end])
+
+        # Shared deque with massive buffer
+        buffer_size = min(len(entries), 10000)
+        file_deque: deque[tuple[str, bytes | None, None | str]] = deque(
+            maxlen=buffer_size
+        )
+        self.logger.info(
+            f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
+        )
+
+        deque_lock = threading.Lock()
+        deque_not_empty = threading.Condition(deque_lock)
+        readers_done = threading.Event()
+        active_readers = [num_readers]
+        total_processed = [0]
+        processing_lock = threading.Lock()
+
+        def reader_thread(file_list: list[FileEntry], reader_id: int) -> None:
+            """Thread-local SGA handle reader."""
+            try:
+                # Each reader creates its own NativeSGAReader with thread-local handle
+                with SgaReader(sga_path) as reader:
+                    for file in file_list:
+                        try:
+                            data = reader.read_buffer(file)
+
+                            with deque_not_empty:
+                                while len(file_deque) >= buffer_size:
+                                    deque_not_empty.wait(0.001)
+                                file_deque.append((file.path, data, None))
+                                deque_not_empty.notify()
+                        except Exception as e:
+                            with deque_not_empty:
+                                while len(file_deque) >= buffer_size:
+                                    deque_not_empty.wait(0.001)
+                                file_deque.append((file.path, None, str(e)))
+                                deque_not_empty.notify()
+            finally:
+                with processing_lock:
+                    active_readers[0] -= 1
+                    if active_readers[0] == 0:
+                        readers_done.set()
+
+        def writer_thread() -> None:
+            """Parallel writers."""
+            while not readers_done.is_set() or file_deque:
+                with deque_not_empty:
+                    while not file_deque and not readers_done.is_set():
+                        deque_not_empty.wait(0.01)
+
+                    if not file_deque:
+                        break
+
+                    item = file_deque.popleft()
+                    deque_not_empty.notify()
+
+                file_path, data, error = item
+
+                if error:
+                    with processing_lock:
+                        self.stats.failed_files += 1
+                        total_processed[0] += 1
+                        if self.stats.failed_files <= 10:
+                            self.logger.error(f"Failed to read {file_path}: {error}")
+                    continue
+
+                try:
+                    dst_path = Path(output_dir) / file_path.lstrip("/")
+
+                    fd = os.open(
+                        dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY
+                    )
+                    os.write(fd, data)  # type: ignore
+                    os.close(fd)
+
+                    with processing_lock:
+                        self.stats.extracted_files += 1
+                        self.stats.extracted_bytes += len(data)  # type: ignore
+                        total_processed[0] += 1
+
+                        if on_progress and total_processed[0] % 500 == 0:
+                            on_progress(total_processed[0], self.stats.total_files)
+
+                except Exception as e:
+                    with processing_lock:
+                        self.stats.failed_files += 1
+                        total_processed[0] += 1
+                        if self.stats.failed_files <= 10:
+                            self.logger.error(f"Failed to write {file_path}: {e}")
+
+        # Start readers
+        readers = []
+        for i in range(num_readers):
+            r = threading.Thread(
+                target=reader_thread, args=(reader_file_lists[i], i), daemon=True
+            )
+            r.start()
+            readers.append(r)
+
+        # Start writers
+        writers = []
+        for _ in range(num_writers):
+            w = threading.Thread(target=writer_thread, daemon=True)
+            w.start()
+            writers.append(w)
+
+        # Wait for completion
+        for r in readers:
+            r.join()
+        for w in writers:
+            w.join()
+
+        # Final progress
+        if on_progress:
+            on_progress(total_processed[0], self.stats.total_files)
+
+        # RE-ENABLE GC
+        if gc_was_enabled:
+            gc.enable()
+            self.logger.info("Re-enabled GC")
+
+        gc.collect()
 
         # Summary
         self.logger.info("Extraction complete!")
