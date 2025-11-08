@@ -15,14 +15,19 @@ import gc
 import hashlib
 import json
 import logging
+import math
 import multiprocessing
 import os
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple, Any, Generator
+
+from relic.core.logmsg import BraceMessage
 
 from relic.sga.core.definitions import OSFlags
 from relic.sga.core.native.definitions import (
@@ -97,6 +102,543 @@ def _categorize_by_size(
 
     return categories
 
+class _ExtractStrategy:
+    def __init__(self, config:Config, cache:DirectoryCacher):
+        self.stats:ExtractionStats = None # type: ignore
+        self.cache = cache
+
+        self.num_workers = config.num_workers or multiprocessing.cpu_count()
+        self.logger = config.logger or logging.getLogger(__name__)
+        self.enable_adaptive_threading = config.enable_adaptive_threading
+        self.enable_batching = config.enable_batching
+        self.enable_delta = config.enable_delta
+        self.chunk_size = config.chunk_size
+
+    def _start(self, name:str, sga_path:str):
+        self.logger.info(BraceMessage("Starting {name} extraction: {sga_path}",name=name, sga_path=sga_path))
+        self.stats = ExtractionStats()
+
+    def _collect(self, sga_path:str, file_filter=None):
+        self.logger.info("Collecting file paths...")
+        entries =  NativeParserV2(sga_path).parse()
+
+        # Apply filter if provided (DELTA MODE!)
+        if file_filter is not None:
+            file_filter_set = set(file_filter)
+            entries = [p for p in entries if p.path in file_filter_set]
+            self.logger.info(f"Filtered to {len(entries)} changed files")
+
+        self.stats.total_files = len(entries)
+        self.logger.info(f"Found {len(entries)} files")
+        return entries
+
+    def _create_dirs(self, entries:list[FileEntry], output_dir:str):
+        self.logger.info("Pre-creating directory structure...")
+        unique_dirs = set()
+        for file in entries:
+            dst_path = Path(output_dir) / file.path.lstrip("/")
+            unique_dirs.add(dst_path.parent)
+
+        for dir_path in unique_dirs: # TODO; use cache?
+            dir_path.mkdir(parents=True, exist_ok=True)
+
+        self.logger.info(f"Created {len(unique_dirs)} directories")
+
+    def _create_batches(self, entries:list[FileEntry], workers:int, batch_size:int):
+        self.logger.info(f"Extracting {len(entries)} files...")
+        self.logger.info(f"Using {workers} workers with batches of {batch_size}")
+
+        # Create batches
+        batches = []
+
+        batch_count, remaining = divmod(len(entries),batch_size)
+
+
+        for i in range(batch_count):
+            batches.append(entries[i*batch_size:(i +1) * batch_size])
+        if remaining > 0:
+            offset = batch_count * batch_size
+            batches.append(entries[offset:offset+remaining])
+
+        self.logger.info(f"Created {len(batches)} batches")
+        return batches
+
+    def _extract_batch_isolated(
+        self,
+        sga_path: str,
+        output_dir: str,
+        batch: List[FileEntry],
+        dst_paths: List[str],
+    ) -> List[Tuple[bool, str, Optional[str]]]:
+        """Extract batch of files with single SGA handle using NATIVE Python file operations.
+
+        Uses native Python Path/open for output (FAST on Windows!) and fs library
+        only for reading from SGA (necessary).
+
+        Args:
+            sga_path: Path to SGA archive
+            output_dir: Output directory
+            batch: List of file entries to extract
+            dst_paths: List of destination paths
+
+        Returns:
+            List of (success, path, error) tuples
+        """
+        results: List[Tuple[bool, str, Optional[str]]] = []
+
+        try:
+            # Open SGA once for entire batch
+            with SgaReader(sga_path) as my_sga:
+                for entry, dst_path in zip(batch, dst_paths):
+                    try:
+                        # Get native destination path
+                        native_dst = Path(output_dir) / dst_path.lstrip("/")
+
+                        # Create parent directory (CACHED for speed!)
+                        self.cache._ensure_directory(native_dst.parent)
+
+                        # Extract with chunked reading (use NATIVE Python file for writing!)
+                        # For small files, use smaller chunks (64KB) for better responsiveness
+                        small_chunk = 64 * 1024  # 64KB - perfect for small files
+                        bytes_written = 0
+                        with my_sga.read_file(entry) as src_file:
+                            with open(
+                                native_dst, "wb", buffering=small_chunk
+                            ) as dst_file:
+                                while True:
+                                    chunk = src_file.read(small_chunk)
+                                    if not chunk:
+                                        break
+                                    dst_file.write(chunk)
+                                    bytes_written += len(chunk)
+
+                                dst_file.flush()
+
+                        results.append((True, entry.path, None))
+
+                    except Exception as e:
+                        results.append((False, entry.path, str(e)))
+
+        except Exception as e:
+            # Batch failed entirely
+            for entry in batch:
+                results.append((False, entry.path, f"Batch error: {str(e)}"))
+
+        return results
+
+    def _execute_batches(self, batches:List[List[FileEntry]], executor,sga_path:str, output_dir:str):
+        futures = {}
+        for batch in batches:
+            dst_paths = [entry.path for entry in batch]
+            future = executor.submit(
+                self._extract_batch_isolated,
+                sga_path,
+                output_dir,
+                batch,
+                dst_paths,
+            )
+            futures[future] = batch
+        return futures
+
+    def _parse_batch_results(self, futures, on_progress):
+        total_processed = 0
+        for future in as_completed(futures):
+            results = future.result()
+
+            for success, path, error in results:
+                if success:
+                    self.stats.extracted_files += 1
+                    total_processed += 1
+                else:
+                    self.stats.failed_files += 1
+                    total_processed += 1
+                    if self.stats.failed_files <= 10:  # Only show first 10 errors
+                        self.logger.error(f"Failed: {path}: {error}")
+
+                if on_progress and total_processed % 500 == 0:
+                    on_progress(total_processed, self.stats.total_files)
+
+            # Final progress callback
+            if on_progress:
+                on_progress(total_processed, self.stats.total_files)
+
+    def _print_summary(self):
+        self.logger.info("Extraction complete!")
+        self.logger.info(f"  Total:      {self.stats.total_files}")
+        self.logger.info(f"  Successful: {self.stats.extracted_files}")
+        self.logger.info(f"  Failed:     {self.stats.failed_files}")
+        self.logger.info(
+            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
+        )
+
+    @contextmanager
+    def _disable_gc(self):
+        gc_was_enabled = gc.isenabled()
+        if gc_was_enabled:
+            gc.disable()
+            self.logger.info("Disabled GC for maximum speed")
+        yield
+        if gc_was_enabled:
+            gc.enable()
+            self.logger.info("Re-enabled GC")
+            gc.collect()
+
+    @contextmanager
+    def _timer(self) -> Generator[Callable[[], float], Any, None]:
+        import time as time_module
+        t0 = time_module.perf_counter()
+
+        def delta():
+            return time_module.perf_counter() - t0
+        yield delta
+
+
+
+class OptimizedStrategy(_ExtractStrategy):
+    def extract(
+                self,
+                sga_path: str,
+                output_dir: str,
+                on_progress: Optional[Callable[[int, int], None]] = None,
+                force_full: bool = False,
+                file_filter: Optional[List[str]] = None,
+        ) -> ExtractionStats:
+            """Extract with all optimizations enabled.
+
+            Args:
+                sga_path: Path to SGA archive
+                output_dir: Output directory
+                on_progress: Optional callback (current, total)
+                force_full: Force full extraction even if delta mode enabled
+                file_filter: Optional list of file paths to extract (None = extract all)
+
+            Returns:
+                Extraction statistics
+            """
+            # TODO; move out of optimized strategy, let parent handle
+            # # Use delta extraction if enabled (unless force_full or file_filter provided)
+            # if self.enable_delta and not force_full and file_filter is None:
+            #     return self.extract_delta(sga_path, output_dir, on_progress)
+
+            self._start("OPTIMIZED",sga_path)
+            # FAST MODE: Skip metadata collection, just get file paths!
+            entries = self._collect(sga_path, file_filter)
+
+            # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
+            self._create_dirs(entries, output_dir)
+
+            # FAST MODE: Skip categorization, optimal batch size!
+            # Balance: Larger batches = fewer SGA opens, but less parallelism
+            # Sweet spot: 100-200 files per batch
+            batch_size = 150  # Optimized for 7815 files = ~52 batches = 52 SGA opens
+            workers = self.num_workers
+
+            # Create batches
+            batches = self._create_batches(entries,workers,batch_size)
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = self._execute_batches(batches, executor, sga_path, output_dir)
+                self._parse_batch_results(futures, on_progress)
+
+            # Summary
+            self._print_summary()
+
+            return self.stats
+
+class StreamingStrategy(_ExtractStrategy):
+    def extract_streaming_native(
+        self,
+        sga_path: str,
+        output_dir: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> ExtractionStats:
+        """PHASE 2: Multi-reader streaming with thread-local SGA handles.
+
+        Architecture:
+        - MULTIPLE READERS: Each with thread-local SGA handle (no lock contention!)
+        - Uses NativeSGAReader for thread-safe parallel reading
+        - Massive memory buffer for smooth flow
+        - All optimizations from Phase 1
+
+        Expected: 2-3x faster than single-reader streaming!
+        """
+        self._start("STREAMING",sga_path)
+
+        # Get file list using native reader
+        entries = self._collect(sga_path)
+
+        self._create_dirs(entries, output_dir)
+
+        with self._disable_gc():
+            # MULTI-READER with thread-local handles!
+            num_readers = min(5, max(2, self.num_workers // 3))  # 5 readers for 15 workers
+            num_writers = self.num_workers - num_readers
+
+            self.logger.info(
+                f"Using {num_readers} readers (thread-local) + {num_writers} writers"
+            )
+
+            # Split files among readers
+            files_per_reader = len(entries) // num_readers
+            reader_file_lists = self._create_batches(entries,num_readers,files_per_reader)
+
+            # Shared deque with massive buffer
+            buffer_size = min(len(entries), 10000)
+            file_deque: deque[ReadResult] = deque(maxlen=buffer_size)
+            self.logger.info(
+                f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
+            )
+
+            deque_lock = threading.Lock()
+            deque_not_empty = threading.Condition(deque_lock)
+            readers_done = threading.Event()
+            active_readers = [num_readers]
+            total_processed = [0]
+            processing_lock = threading.Lock()
+
+            def reader_thread(file_list: list[FileEntry], reader_id: int) -> None:
+                """Thread-local SGA handle reader."""
+                try:
+                    # Each reader creates its own NativeSGAReader with thread-local handle
+                    with SgaReader(sga_path) as reader:
+                        for file in file_list:
+                            try:
+                                data = reader.read_buffer(file)
+
+                                with deque_not_empty:
+                                    while len(file_deque) >= buffer_size:
+                                        deque_not_empty.wait(0.001)
+                                    file_deque.append(ReadResult(file.path, data, None))
+                                    deque_not_empty.notify()
+                            except Exception as e:
+                                with deque_not_empty:
+                                    while len(file_deque) >= buffer_size:
+                                        deque_not_empty.wait(0.001)
+                                    file_deque.append(ReadResult(file.path, None, str(e)))
+                                    deque_not_empty.notify()
+                finally:
+                    with processing_lock:
+                        active_readers[0] -= 1
+                        if active_readers[0] == 0:
+                            readers_done.set()
+
+            def writer_thread() -> None:
+                """Parallel writers."""
+                while not readers_done.is_set() or file_deque:
+                    with deque_not_empty:
+                        while not file_deque and not readers_done.is_set():
+                            deque_not_empty.wait(0.01)
+
+                        if not file_deque:
+                            break
+
+                        item = file_deque.popleft()
+                        deque_not_empty.notify()
+
+                    file_path, data, error = item
+
+                    if error:
+                        with processing_lock:
+                            self.stats.failed_files += 1
+                            total_processed[0] += 1
+                            if self.stats.failed_files <= 10:
+                                self.logger.error(f"Failed to read {file_path}: {error}")
+                        continue
+
+                    try:
+                        dst_path = Path(output_dir) / file_path.lstrip("/")
+
+                        fd = os.open(
+                            dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY
+                        )
+                        os.write(fd, data)  # type: ignore
+                        os.close(fd)
+
+                        with processing_lock:
+                            self.stats.extracted_files += 1
+                            self.stats.extracted_bytes += len(data)  # type: ignore
+                            total_processed[0] += 1
+
+                            if on_progress and total_processed[0] % 500 == 0:
+                                on_progress(total_processed[0], self.stats.total_files)
+
+                    except Exception as e:
+                        with processing_lock:
+                            self.stats.failed_files += 1
+                            total_processed[0] += 1
+                            if self.stats.failed_files <= 10:
+                                self.logger.error(f"Failed to write {file_path}: {e}")
+
+            # Start readers
+            readers = []
+            for i in range(num_readers):
+                r = threading.Thread(
+                    target=reader_thread, args=(reader_file_lists[i], i), daemon=True
+                )
+                r.start()
+                readers.append(r)
+
+            # Start writers
+            writers = []
+            for _ in range(num_writers):
+                w = threading.Thread(target=writer_thread, daemon=True)
+                w.start()
+                writers.append(w)
+
+            # Wait for completion
+            for r in readers:
+                r.join()
+            for w in writers:
+                w.join()
+
+            # Final progress
+            if on_progress:
+                on_progress(total_processed[0], self.stats.total_files)
+
+        # Summary
+        self._print_summary()
+
+        return self.stats
+
+class UltraFastStrategy(_ExtractStrategy):
+    def extract(
+        self,
+        sga_path: str,
+        output_dir: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> ExtractionStats:
+        """ULTRA-FAST extraction with parallel decompression.
+
+        Same as extract_streaming but with:
+        - Multiple concurrent readers (each with own SGA handle)
+        - Parallel decompression
+        - Target: 3-5 seconds (vs 12s)
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        self._start("ULTRA-FAST",sga_path)
+
+        timings = {"file_listing": 0.0, "dir_creation": 0.0, "extraction": 0.0}
+
+        # Get file list
+        with self._timer() as timer:
+            files = self._collect(sga_path)
+            timings["file_listing"] = timer()
+
+        with self._timer() as timer:
+            self._create_dirs(files, output_dir)
+            timings["dir_creation"] = timer()
+
+        with self._disable_gc():
+            # Use MANY parallel workers (each opens own SGA handle)
+            max_workers = min(self.num_workers * 2, 30)
+            batch_size = 50
+            file_batches = self._create_batches(files, max_workers, batch_size)
+
+            processed = [0]
+            lock = threading.Lock()
+
+            def process_batch(batch: list[FileEntry]) -> dict[str, int]:
+                """Process batch with dedicated SGA handle."""
+                local_stats = {"extracted": 0, "failed": 0, "bytes": 0}
+
+                # Each worker opens its own SGA
+                with SgaReader(sga_path) as sga:
+                    for file in batch:
+                        try:
+                            # Read and decompress (fs handles this)
+                            data = sga.read_buffer(file)
+
+                            # Write to disk
+                            dst_path = Path(output_dir) / file.path.lstrip("/")
+                            fd = os.open(
+                                dst_path,
+                                OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
+                            )
+                            os.write(fd, data)
+                            os.close(fd)
+
+                            local_stats["extracted"] += 1
+                            local_stats["bytes"] += len(data)
+
+                        except Exception as e:
+                            local_stats["failed"] += 1
+                            if local_stats["failed"] <= 3:
+                                self.logger.error(f"Failed {file.path}: {e}")
+
+                # Update global stats
+                with lock:
+                    self.stats.extracted_files += local_stats["extracted"]
+                    self.stats.failed_files += local_stats["failed"]
+                    self.stats.extracted_bytes += local_stats["bytes"]
+                    processed[0] += len(batch)
+
+                    if on_progress and processed[0] % 500 == 0:
+                        on_progress(processed[0], self.stats.total_files)
+
+                return local_stats
+
+        # Process all batches in PARALLEL
+            with self._timer() as timer:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(process_batch, batch) for batch in file_batches]
+
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        self.logger.error(f"Batch failed: {e}")
+
+            timings["extraction"] = timer()
+
+            # Final progress
+            if on_progress:
+                on_progress(processed[0], self.stats.total_files)
+
+
+        # Summary
+        self._print_summary()
+        self.logger.info(f"  Time:       {timings['extraction']:.2f}s")
+        self.logger.info(
+            f"  Throughput: {self.stats.extracted_bytes / timings['extraction'] / 1024 / 1024:.0f} MB/s"
+        )
+        return self.stats
+
+
+@dataclass
+class Config(slots=True):
+    num_workers: Optional[int] = None,
+    logger: Optional[logging.Logger] = None,
+    enable_adaptive_threading: bool = True,
+    enable_batching: bool = True,
+    enable_delta: bool = False,
+    chunk_size: int = 1024 * 1024,
+
+class DirectoryCacher:
+    # Moved to it's own class to allow strategies to reference the same
+    def __init__(self):
+        # Thread-safe directory cache to avoid redundant mkdir calls
+        self._dir_cache: Set[str] = set()
+        self._dir_cache_lock = threading.Lock()
+
+    def _ensure_directory(self, dir_path: Path) -> None:
+        """Ensure directory exists with caching to avoid redundant mkdir calls.
+
+        Args:
+            dir_path: Directory path to create
+        """
+        dir_str = str(dir_path)
+
+        # Fast path: check if already created
+        if dir_str in self._dir_cache:
+            return
+
+        # Slow path: create and cache
+        with self._dir_cache_lock:
+            # Double-check after acquiring lock
+            if dir_str not in self._dir_cache:
+                dir_path.mkdir(parents=True, exist_ok=True)
+                self._dir_cache.add(dir_str)
 
 class AdvancedParallelUnpacker:
     """Advanced parallel unpacker with comprehensive optimizations."""
@@ -131,29 +673,7 @@ class AdvancedParallelUnpacker:
         self.enable_delta = enable_delta
         self.chunk_size = chunk_size
 
-        # Thread-safe directory cache to avoid redundant mkdir calls
-        self._dir_cache: Set[str] = set()
-        self._dir_cache_lock = threading.Lock()
-        self.stats = ExtractionStats()
 
-    def _ensure_directory(self, dir_path: Path) -> None:
-        """Ensure directory exists with caching to avoid redundant mkdir calls.
-
-        Args:
-            dir_path: Directory path to create
-        """
-        dir_str = str(dir_path)
-
-        # Fast path: check if already created
-        if dir_str in self._dir_cache:
-            return
-
-        # Slow path: create and cache
-        with self._dir_cache_lock:
-            # Double-check after acquiring lock
-            if dir_str not in self._dir_cache:
-                dir_path.mkdir(parents=True, exist_ok=True)
-                self._dir_cache.add(dir_str)
 
     def _get_optimal_workers(self, category: str, file_count: int) -> int:
         """Calculate optimal worker count for file category.
@@ -221,525 +741,6 @@ class AdvancedParallelUnpacker:
             f"Batched {len(entries)} tiny files into {len(batches)} batches"
         )
         return batches
-
-    def _extract_batch_isolated(
-        self,
-        sga_path: str,
-        output_dir: str,
-        batch: List[FileEntry],
-        dst_paths: List[str],
-    ) -> List[Tuple[bool, str, Optional[str]]]:
-        """Extract batch of files with single SGA handle using NATIVE Python file operations.
-
-        Uses native Python Path/open for output (FAST on Windows!) and fs library
-        only for reading from SGA (necessary).
-
-        Args:
-            sga_path: Path to SGA archive
-            output_dir: Output directory
-            batch: List of file entries to extract
-            dst_paths: List of destination paths
-
-        Returns:
-            List of (success, path, error) tuples
-        """
-        results: List[Tuple[bool, str, Optional[str]]] = []
-
-        try:
-            # Open SGA once for entire batch
-            with SgaReader(sga_path) as my_sga:
-                for entry, dst_path in zip(batch, dst_paths):
-                    try:
-                        # Get native destination path
-                        native_dst = Path(output_dir) / dst_path.lstrip("/")
-
-                        # Create parent directory (CACHED for speed!)
-                        self._ensure_directory(native_dst.parent)
-
-                        # Extract with chunked reading (use NATIVE Python file for writing!)
-                        # For small files, use smaller chunks (64KB) for better responsiveness
-                        small_chunk = 64 * 1024  # 64KB - perfect for small files
-                        bytes_written = 0
-                        with my_sga.read_file(entry) as src_file:
-                            with open(
-                                native_dst, "wb", buffering=small_chunk
-                            ) as dst_file:
-                                while True:
-                                    chunk = src_file.read(small_chunk)
-                                    if not chunk:
-                                        break
-                                    dst_file.write(chunk)
-                                    bytes_written += len(chunk)
-
-                                dst_file.flush()
-
-                        results.append((True, entry.path, None))
-
-                    except Exception as e:
-                        results.append((False, entry.path, str(e)))
-
-        except Exception as e:
-            # Batch failed entirely
-            for entry in batch:
-                results.append((False, entry.path, f"Batch error: {str(e)}"))
-
-        return results
-
-    def extract_optimized(
-        self,
-        sga_path: str,
-        output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-        force_full: bool = False,
-        file_filter: Optional[List[str]] = None,
-    ) -> ExtractionStats:
-        """Extract with all optimizations enabled.
-
-        Args:
-            sga_path: Path to SGA archive
-            output_dir: Output directory
-            on_progress: Optional callback (current, total)
-            force_full: Force full extraction even if delta mode enabled
-            file_filter: Optional list of file paths to extract (None = extract all)
-
-        Returns:
-            Extraction statistics
-        """
-        # Use delta extraction if enabled (unless force_full or file_filter provided)
-        if self.enable_delta and not force_full and file_filter is None:
-            return self.extract_delta(sga_path, output_dir, on_progress)
-
-        self.logger.info(f"Starting FAST extraction: {sga_path}")
-        self.stats = ExtractionStats()
-
-        # FAST MODE: Skip metadata collection, just get file paths!
-        self.logger.info("Collecting file paths...")
-        entries = NativeParserV2(sga_path).parse()
-
-        # Apply filter if provided (DELTA MODE!)
-        if file_filter is not None:
-            file_filter_set = set(file_filter)
-            entries = [p for p in entries if p.path in file_filter_set]
-            self.logger.info(f"Filtered to {len(entries)} changed files")
-
-        self.stats.total_files = len(entries)
-        self.logger.info(f"Found {len(entries)} files")
-
-        # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
-        self.logger.info("Pre-creating directory structure...")
-        unique_dirs = set()
-        for file in entries:
-            dst_path = Path(output_dir) / file.path.lstrip("/")
-            unique_dirs.add(dst_path.parent)
-
-        for dir_path in unique_dirs:
-            dir_path.mkdir(parents=True, exist_ok=True)
-
-        self.logger.info(f"Created {len(unique_dirs)} directories")
-
-        # FAST MODE: Skip categorization, optimal batch size!
-        # Balance: Larger batches = fewer SGA opens, but less parallelism
-        # Sweet spot: 100-200 files per batch
-        batch_size = 150  # Optimized for 7815 files = ~52 batches = 52 SGA opens
-        workers = self.num_workers
-
-        self.logger.info(f"Extracting {len(entries)} files...")
-        self.logger.info(f"Using {workers} workers with batches of {batch_size}")
-
-        # Create batches
-        batches = []
-        for i in range(0, len(entries), batch_size):
-            batches.append(entries[i : i + batch_size])
-
-        self.logger.info(f"Created {len(batches)} batches")
-
-        total_processed = 0
-
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {}
-
-            for batch in batches:
-                dst_paths = [entry.path for entry in batch]
-                future = executor.submit(
-                    self._extract_batch_isolated,
-                    sga_path,
-                    output_dir,
-                    batch,
-                    dst_paths,
-                )
-                futures[future] = batch
-
-            for future in as_completed(futures):
-                batch = futures[future]
-                results = future.result()
-
-                for success, path, error in results:
-                    if success:
-                        self.stats.extracted_files += 1
-                        total_processed += 1
-                    else:
-                        self.stats.failed_files += 1
-                        total_processed += 1
-                        if self.stats.failed_files <= 10:  # Only show first 10 errors
-                            self.logger.error(f"Failed: {path}: {error}")
-
-                    if on_progress and total_processed % 500 == 0:
-                        on_progress(total_processed, self.stats.total_files)
-
-        # Final progress callback
-        if on_progress:
-            on_progress(total_processed, self.stats.total_files)
-
-        # Summary
-        self.logger.info("Extraction complete!")
-        self.logger.info(f"  Total:      {self.stats.total_files}")
-        self.logger.info(f"  Successful: {self.stats.extracted_files}")
-        self.logger.info(f"  Failed:     {self.stats.failed_files}")
-        self.logger.info(
-            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
-        )
-
-        return self.stats
-
-    def extract_streaming_native(
-        self,
-        sga_path: str,
-        output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-    ) -> ExtractionStats:
-        """PHASE 2: Multi-reader streaming with thread-local SGA handles.
-
-        Architecture:
-        - MULTIPLE READERS: Each with thread-local SGA handle (no lock contention!)
-        - Uses NativeSGAReader for thread-safe parallel reading
-        - Massive memory buffer for smooth flow
-        - All optimizations from Phase 1
-
-        Expected: 2-3x faster than single-reader streaming!
-        """
-        self.logger.info(f"Starting NATIVE MULTI-READER extraction: {sga_path}")
-        self.stats = ExtractionStats()
-
-        # Get file list using native reader
-        self.logger.info("Collecting file paths...")
-        entries =  NativeParserV2(sga_path).parse()
-
-        self.stats.total_files = len(entries)
-        self.logger.info(f"Found {len(entries)} files")
-
-        # PRE-CREATE ALL DIRECTORIES
-        self.logger.info("Pre-creating directory structure...")
-        unique_dirs = set()
-        for file_path in entries:
-            dst_path = Path(output_dir) / file_path.path.lstrip("/")
-            unique_dirs.add(dst_path.parent)
-
-        for dir_path in unique_dirs:
-            dir_path.mkdir(parents=True, exist_ok=True)
-
-        self.logger.info(f"Created {len(unique_dirs)} directories")
-
-        # DISABLE GC
-        gc_was_enabled = gc.isenabled()
-        gc.disable()
-        self.logger.info("Disabled GC for maximum speed")
-
-        # MULTI-READER with thread-local handles!
-        num_readers = min(5, max(2, self.num_workers // 3))  # 5 readers for 15 workers
-        num_writers = self.num_workers - num_readers
-
-        self.logger.info(
-            f"Using {num_readers} readers (thread-local) + {num_writers} writers"
-        )
-
-        # Split files among readers
-        files_per_reader = len(entries) // num_readers
-        reader_file_lists = []
-        for i in range(num_readers):
-            start = i * files_per_reader
-            end = start + files_per_reader if i < num_readers - 1 else len(entries)
-            reader_file_lists.append(entries[start:end])
-
-        # Shared deque with massive buffer
-        buffer_size = min(len(entries), 10000)
-        file_deque: deque[tuple[str, bytes | None, None | str]] = deque(
-            maxlen=buffer_size
-        )
-        self.logger.info(
-            f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
-        )
-
-        deque_lock = threading.Lock()
-        deque_not_empty = threading.Condition(deque_lock)
-        readers_done = threading.Event()
-        active_readers = [num_readers]
-        total_processed = [0]
-        processing_lock = threading.Lock()
-
-        def reader_thread(file_list: list[FileEntry], reader_id: int) -> None:
-            """Thread-local SGA handle reader."""
-            try:
-                # Each reader creates its own NativeSGAReader with thread-local handle
-                with SgaReader(sga_path) as reader:
-                    for file in file_list:
-                        try:
-                            data = reader.read_buffer(file)
-
-                            with deque_not_empty:
-                                while len(file_deque) >= buffer_size:
-                                    deque_not_empty.wait(0.001)
-                                file_deque.append((file.path, data, None))
-                                deque_not_empty.notify()
-                        except Exception as e:
-                            with deque_not_empty:
-                                while len(file_deque) >= buffer_size:
-                                    deque_not_empty.wait(0.001)
-                                file_deque.append((file.path, None, str(e)))
-                                deque_not_empty.notify()
-            finally:
-                with processing_lock:
-                    active_readers[0] -= 1
-                    if active_readers[0] == 0:
-                        readers_done.set()
-
-        def writer_thread() -> None:
-            """Parallel writers."""
-            while not readers_done.is_set() or file_deque:
-                with deque_not_empty:
-                    while not file_deque and not readers_done.is_set():
-                        deque_not_empty.wait(0.01)
-
-                    if not file_deque:
-                        break
-
-                    item = file_deque.popleft()
-                    deque_not_empty.notify()
-
-                file_path, data, error = item
-
-                if error:
-                    with processing_lock:
-                        self.stats.failed_files += 1
-                        total_processed[0] += 1
-                        if self.stats.failed_files <= 10:
-                            self.logger.error(f"Failed to read {file_path}: {error}")
-                    continue
-
-                try:
-                    dst_path = Path(output_dir) / file_path.lstrip("/")
-
-                    fd = os.open(
-                        dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY
-                    )
-                    os.write(fd, data)  # type: ignore
-                    os.close(fd)
-
-                    with processing_lock:
-                        self.stats.extracted_files += 1
-                        self.stats.extracted_bytes += len(data)  # type: ignore
-                        total_processed[0] += 1
-
-                        if on_progress and total_processed[0] % 500 == 0:
-                            on_progress(total_processed[0], self.stats.total_files)
-
-                except Exception as e:
-                    with processing_lock:
-                        self.stats.failed_files += 1
-                        total_processed[0] += 1
-                        if self.stats.failed_files <= 10:
-                            self.logger.error(f"Failed to write {file_path}: {e}")
-
-        # Start readers
-        readers = []
-        for i in range(num_readers):
-            r = threading.Thread(
-                target=reader_thread, args=(reader_file_lists[i], i), daemon=True
-            )
-            r.start()
-            readers.append(r)
-
-        # Start writers
-        writers = []
-        for _ in range(num_writers):
-            w = threading.Thread(target=writer_thread, daemon=True)
-            w.start()
-            writers.append(w)
-
-        # Wait for completion
-        for r in readers:
-            r.join()
-        for w in writers:
-            w.join()
-
-        # Final progress
-        if on_progress:
-            on_progress(total_processed[0], self.stats.total_files)
-
-        # RE-ENABLE GC
-        if gc_was_enabled:
-            gc.enable()
-            self.logger.info("Re-enabled GC")
-
-        gc.collect()
-
-        # Summary
-        self.logger.info("Extraction complete!")
-        self.logger.info(f"  Total:      {self.stats.total_files}")
-        self.logger.info(f"  Successful: {self.stats.extracted_files}")
-        self.logger.info(f"  Failed:     {self.stats.failed_files}")
-        self.logger.info(
-            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
-        )
-
-        return self.stats
-
-    def extract_ultra_fast(
-        self,
-        sga_path: str,
-        output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-    ) -> ExtractionStats:
-        """ULTRA-FAST extraction with parallel decompression.
-
-        Same as extract_streaming but with:
-        - Multiple concurrent readers (each with own SGA handle)
-        - Parallel decompression
-        - Target: 3-5 seconds (vs 12s)
-        """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import time as time_module
-
-        self.logger.info(f"Starting ULTRA-FAST extraction: {sga_path}")
-        self.stats = ExtractionStats()
-
-        timings = {"file_listing": 0.0, "dir_creation": 0.0, "extraction": 0.0}
-
-        # Get file list
-        t0 = time_module.perf_counter()
-        self.logger.info("Collecting file paths...")
-        files = NativeParserV2(sga_path).parse()
-        timings["file_listing"] = time_module.perf_counter() - t0
-
-        self.stats.total_files = len(files)
-        self.logger.info(
-            f"Found {len(files)} files (took {timings['file_listing']:.2f}s)"
-        )
-
-        # PRE-CREATE ALL DIRECTORIES
-        t0 = time_module.perf_counter()
-        self.logger.info("Pre-creating directory structure...")
-        unique_dirs = set()
-        for file in files:
-            dst_path = Path(output_dir) / file.path.lstrip("/")
-            unique_dirs.add(dst_path.parent)
-
-        for dir_path in unique_dirs:
-            dir_path.mkdir(parents=True, exist_ok=True)
-        timings["dir_creation"] = time_module.perf_counter() - t0
-
-        self.logger.info(
-            f"Created {len(unique_dirs)} directories (took {timings['dir_creation']:.2f}s)"
-        )
-
-        # DISABLE GC
-        gc_was_enabled = gc.isenabled()
-        gc.disable()
-        self.logger.info("Disabled GC for maximum speed")
-
-        # Use MANY parallel workers (each opens own SGA handle)
-        max_workers = min(self.num_workers * 2, 30)
-        self.logger.info(f"Using {max_workers} parallel workers (ULTRA mode)")
-
-        # Batch files
-        batch_size = 50
-        file_batches = [
-            files[i : i + batch_size] for i in range(0, len(files), batch_size)
-        ]
-        self.logger.info(
-            f"Processing {len(file_batches)} batches of {batch_size} files"
-        )
-
-        processed = [0]
-        lock = threading.Lock()
-
-        def process_batch(batch: list[FileEntry]) -> dict[str, int]:
-            """Process batch with dedicated SGA handle."""
-            local_stats = {"extracted": 0, "failed": 0, "bytes": 0}
-
-            # Each worker opens its own SGA
-            with SgaReader(sga_path) as sga:
-                for file in batch:
-                    try:
-                        # Read and decompress (fs handles this)
-                        data = sga.read_buffer(file)
-
-                        # Write to disk
-                        dst_path = Path(output_dir) / file.path.lstrip("/")
-                        fd = os.open(
-                            dst_path,
-                            OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
-                        )
-                        os.write(fd, data)
-                        os.close(fd)
-
-                        local_stats["extracted"] += 1
-                        local_stats["bytes"] += len(data)
-
-                    except Exception as e:
-                        local_stats["failed"] += 1
-                        if local_stats["failed"] <= 3:
-                            self.logger.error(f"Failed {file.path}: {e}")
-
-            # Update global stats
-            with lock:
-                self.stats.extracted_files += local_stats["extracted"]
-                self.stats.failed_files += local_stats["failed"]
-                self.stats.extracted_bytes += local_stats["bytes"]
-                processed[0] += len(batch)
-
-                if on_progress and processed[0] % 500 == 0:
-                    on_progress(processed[0], self.stats.total_files)
-
-            return local_stats
-
-        # Process all batches in PARALLEL
-        t0 = time_module.perf_counter()
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(process_batch, batch) for batch in file_batches]
-
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    self.logger.error(f"Batch failed: {e}")
-
-        timings["extraction"] = time_module.perf_counter() - t0
-
-        # Final progress
-        if on_progress:
-            on_progress(processed[0], self.stats.total_files)
-
-        # RE-ENABLE GC
-        if gc_was_enabled:
-            gc.enable()
-            self.logger.info("Re-enabled GC")
-
-        gc.collect()
-
-        # Summary
-        self.logger.info("Extraction complete!")
-        self.logger.info(f"  Total:      {self.stats.total_files}")
-        self.logger.info(f"  Successful: {self.stats.extracted_files}")
-        self.logger.info(f"  Failed:     {self.stats.failed_files}")
-        self.logger.info(
-            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
-        )
-        self.logger.info(f"  Time:       {timings['extraction']:.2f}s")
-        self.logger.info(
-            f"  Throughput: {self.stats.extracted_bytes / timings['extraction'] / 1024 / 1024:.0f} MB/s"
-        )
-
-        return self.stats
 
     def extract(
         self,
