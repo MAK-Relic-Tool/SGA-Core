@@ -23,8 +23,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from fs import open_fs
-from fs.base import FS
 
 from relic.sga.core.definitions import OSFlags
 from relic.sga.core.native.definitions import (
@@ -33,17 +31,59 @@ from relic.sga.core.native.definitions import (
     ExtractionPlan,
     ExtractionPlanCategory,
 )
-from relic.sga.core.native.v2 import NATIVE_READER_AVAILABLE, NativeSgaV2
+from relic.sga.core.native.v2 import NativeReaderV2
 
 
-class AdvancedParallelUnpacker:
-    """Advanced parallel unpacker with comprehensive optimizations."""
 
-    # File size categories (bytes)
+def _categorize_by_size(
+    entries: List[FileEntry],
+    logger:logging.Logger
+) -> Dict[str, List[FileEntry]]:
     SIZE_TINY = 10 * 1024  # 10KB
     SIZE_SMALL = 1024 * 1024  # 1MB
     SIZE_MEDIUM = 10 * 1024 * 1024  # 10MB
     SIZE_LARGE = 100 * 1024 * 1024  # 100MB
+    """Categorize files by size for optimal scheduling.
+
+    Args:
+        entries: List of file entries
+
+    Returns:
+        Dictionary mapping category to file list
+    """
+    categories: dict[str, list[FileEntry]] = {
+        "tiny": [],  # < 10KB
+        "small": [],  # 10KB - 1MB
+        "medium": [],  # 1MB - 10MB
+        "large": [],  # 10MB - 100MB
+        "huge": [],  # > 100MB
+    }
+
+    for entry in entries:
+        if entry.decompressed_size < SIZE_TINY:
+            categories["tiny"].append(entry)
+        elif entry.decompressed_size < SIZE_SMALL:
+            categories["small"].append(entry)
+        elif entry.decompressed_size < SIZE_MEDIUM:
+            categories["medium"].append(entry)
+        elif entry.decompressed_size < SIZE_LARGE:
+            categories["large"].append(entry)
+        else:
+            categories["huge"].append(entry)
+
+    # Log distribution
+    logger.info("File size distribution:")
+    for cat, files in categories.items():
+        if files:
+            total_size = sum(f.decompressed_size for f in files)
+            logger.info(
+                f"  {cat:8s}: {len(files):6d} files ({total_size / 1024 / 1024:.1f} MB)"
+            )
+
+    return categories
+class AdvancedParallelUnpacker:
+    """Advanced parallel unpacker with comprehensive optimizations."""
+
 
     # Batching thresholds
     TINY_FILE_BATCH_SIZE = 100
@@ -100,47 +140,6 @@ class AdvancedParallelUnpacker:
                 self._dir_cache.add(dir_str)
 
 
-    def _categorize_by_size(
-        self, entries: List[FileEntry]
-    ) -> Dict[str, List[FileEntry]]:
-        """Categorize files by size for optimal scheduling.
-
-        Args:
-            entries: List of file entries
-
-        Returns:
-            Dictionary mapping category to file list
-        """
-        categories: dict[str, list[FileEntry]] = {
-            "tiny": [],  # < 10KB
-            "small": [],  # 10KB - 1MB
-            "medium": [],  # 1MB - 10MB
-            "large": [],  # 10MB - 100MB
-            "huge": [],  # > 100MB
-        }
-
-        for entry in entries:
-            if entry.size < self.SIZE_TINY:
-                categories["tiny"].append(entry)
-            elif entry.size < self.SIZE_SMALL:
-                categories["small"].append(entry)
-            elif entry.size < self.SIZE_MEDIUM:
-                categories["medium"].append(entry)
-            elif entry.size < self.SIZE_LARGE:
-                categories["large"].append(entry)
-            else:
-                categories["huge"].append(entry)
-
-        # Log distribution
-        self.logger.info("File size distribution:")
-        for cat, files in categories.items():
-            if files:
-                total_size = sum(f.size for f in files)
-                self.logger.info(
-                    f"  {cat:8s}: {len(files):6d} files ({total_size / 1024 / 1024:.1f} MB)"
-                )
-
-        return categories
 
     def _get_optimal_workers(self, category: str, file_count: int) -> int:
         """Calculate optimal worker count for file category.
@@ -240,33 +239,31 @@ class AdvancedParallelUnpacker:
             self._ensure_directory(native_dst.parent)
 
             # Open SGA and extract file
-            with open_fs(sga_path, default_protocol="sga") as my_sga:
+            with open_internal_file(sga_path, entry) as src_file:
                 # Extract with chunked reading (use NATIVE Python file for writing!)
-                with my_sga.open(entry.path, "rb") as src_file:
-                    with open(native_dst, "wb") as dst_file:
-                        while True:
-                            chunk = src_file.read(self.chunk_size)
-                            if not chunk:
-                                break
-                            dst_file.write(chunk)
-                            bytes_written += len(chunk)
+                with open(native_dst, "wb") as dst_file:
+                    while True:
+                        chunk = src_file.read(self.chunk_size)
+                        if not chunk:
+                            break
+                        dst_file.write(chunk)
+                        bytes_written += len(chunk)
 
-                        # Flush to disk
-                        dst_file.flush()
-                        try:
-                            os.fsync(dst_file.fileno())
-                        except (AttributeError, OSError):
-                            pass
+                    # Flush to disk
+                    dst_file.flush()
+                    try:
+                        os.fsync(dst_file.fileno())
+                    except (AttributeError, OSError):
+                        pass
 
                 # Verify
-                if bytes_written == 0 and entry.size > 0:
+                if bytes_written == 0 and entry.decompressed_size > 0:
                     return (False, entry.path, "No data written")
 
                 # Preserve timestamps
                 try:
-                    src_info = my_sga.getinfo(entry.path, namespaces=["details"])
-                    if hasattr(src_info, "modified") and src_info.modified:
-                        timestamp = src_info.modified.timestamp()
+                    if entry.modified:
+                        timestamp = entry.modified.timestamp()
                         os.utime(native_dst, (timestamp, timestamp))
                 except Exception:
                     pass
@@ -384,7 +381,7 @@ class AdvancedParallelUnpacker:
 
         # Create simple FileEntry objects (minimal overhead)
         entries = [
-            FileEntry(path=p, size=0, compressed_size=0, storage_type="unknown")
+            FileEntry(path=p, decompressed_size=0, compressed_size=0, storage_type=0, data_offset=0)
             for p in file_paths
         ]
 
@@ -464,360 +461,6 @@ class AdvancedParallelUnpacker:
 
         return self.stats
 
-    def extract_streaming(
-        self,
-        sga_path: str,
-        output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-    ) -> ExtractionStats:
-        """STREAMING PIPELINE: Open SGA once, stream files through memory to parallel writers.
-
-        Architecture:
-        - Single READER thread: Opens SGA once, reads files → memory queue
-        - Multiple WRITER threads: Take from queue → write to disk in parallel
-
-        This decouples SGA reading (serial) from disk writing (parallel) for MAX SPEED!
-        """
-        import time as time_module
-
-        self.logger.info(f"Starting STREAMING extraction: {sga_path}")
-        self.stats = ExtractionStats()
-
-        # PROFILING: Track timings
-        timings = {
-            "file_listing": 0,
-            "dir_creation": 0.0,
-            "gc_disable": 0.0,
-            "reader_total": 0.0,
-            "writer_total": 0,
-            "extraction_total": 0,
-        }
-
-        # Get file list
-        t0 = time_module.perf_counter()
-        self.logger.info("Collecting file paths...")
-        with open_fs(sga_path, default_protocol="sga") as sga:
-            file_paths = list(sga.walk.files())
-        timings["file_listing"] = time_module.perf_counter() - t0
-
-        self.stats.total_files = len(file_paths)
-        self.logger.info(
-            f"Found {len(file_paths)} files (took {timings['file_listing']:.2f}s)"
-        )
-
-        # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
-        t0 = time_module.perf_counter()
-        self.logger.info("Pre-creating directory structure...")
-        unique_dirs = set()
-        for file_path in file_paths:
-            dst_path = Path(output_dir) / file_path.lstrip("/")
-            unique_dirs.add(dst_path.parent)
-
-        for dir_path in unique_dirs:
-            dir_path.mkdir(parents=True, exist_ok=True)
-        timings["dir_creation"] = time_module.perf_counter() - t0
-
-        self.logger.info(
-            f"Created {len(unique_dirs)} directories (took {timings['dir_creation']:.2f}s)"
-        )
-
-        # DISABLE GARBAGE COLLECTION during extraction (HUGE speedup!)
-        t0 = time_module.perf_counter()
-        gc_was_enabled = gc.isenabled()
-        gc.disable()
-        timings["gc_disable"] = time_module.perf_counter() - t0
-        self.logger.info(
-            f"Disabled GC for maximum speed (took {timings['gc_disable']:.3f}s)"
-        )
-
-        # OPTIMIZED: Single reader is actually fastest!
-        # Multiple readers add lock contention in fs library
-        # Single reader + many writers = best throughput
-        num_readers = 1  # SINGLE READER = FASTEST!
-        num_writers = self.num_workers  # All workers write
-
-        self.logger.info(
-            f"Using {num_readers} reader + {num_writers} writers (OPTIMIZED)"
-        )
-
-        # Split files among readers
-        files_per_reader = len(file_paths) // num_readers
-        reader_file_lists = []
-        for i in range(num_readers):
-            start = i * files_per_reader
-            end = start + files_per_reader if i < num_readers - 1 else len(file_paths)
-            reader_file_lists.append(file_paths[start:end])
-
-        # Shared deque: readers → writers (UNLIMITED MEMORY MODE!)
-        # Use massive buffer - we can afford it!
-        buffer_size = min(len(file_paths), 10000)  # Up to 10K files in memory!
-        file_deque: deque[tuple[str, bytes | None, str | None]] = deque(
-            maxlen=buffer_size
-        )
-        self.logger.info(
-            f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
-        )
-        deque_lock = threading.Lock()  # Manual lock for deque
-        deque_not_empty = threading.Condition(deque_lock)
-        readers_done = threading.Event()
-        active_readers = [num_readers]  # Track how many readers are still working
-        total_processed = [0]
-        processing_lock = threading.Lock()
-
-        # Writer statistics
-        writer_stats = {
-            "total_wait_time": 0.0,
-            "total_write_time": 0.0,
-            "files_written": 0.0,
-        }
-        writer_stats_lock = threading.Lock()
-
-        def reader_thread(file_list: list[str], reader_id: int) -> None:
-            """Multiple reader threads: each reads from its own SGA handle."""
-            reader_start = time_module.perf_counter()
-            total_open_time: float = 0
-            total_read_time: float = 0
-            total_queue_time: float = 0
-            files_read: int = 0
-            sga_open_time: float = 0
-            try:
-                t_open_sga = time_module.perf_counter()
-                with open_fs(sga_path, default_protocol="sga") as sga:
-                    sga_open_time = time_module.perf_counter() - t_open_sga
-
-                    for file_path in file_list:  # Use assigned file_list!
-                        try:
-                            # Time: Opening the file handle in SGA
-                            t_open = time_module.perf_counter()
-                            f = sga.open(file_path, "rb")
-                            total_open_time += time_module.perf_counter() - t_open
-
-                            # Time: Reading the actual data
-                            t_read = time_module.perf_counter()
-                            data = f.read()
-                            f.close()
-                            total_read_time += time_module.perf_counter() - t_read
-                            files_read += 1
-
-                            # Put in deque for writers (minimal backpressure - we have RAM!)
-                            t_queue = time_module.perf_counter()
-                            with deque_not_empty:
-                                while (
-                                    len(file_deque) >= buffer_size
-                                ):  # Wait if truly full
-                                    deque_not_empty.wait(0.001)
-                                file_deque.append((file_path, data, None))
-                                deque_not_empty.notify()
-                            total_queue_time += time_module.perf_counter() - t_queue
-                        except Exception as e:
-                            with deque_not_empty:
-                                while len(file_deque) >= buffer_size:
-                                    deque_not_empty.wait(0.001)
-                                file_deque.append((file_path, None, str(e)))
-                                deque_not_empty.notify()
-            finally:
-                reader_total = time_module.perf_counter() - reader_start
-                overhead = reader_total - (
-                    total_open_time + total_read_time + total_queue_time + sga_open_time
-                )
-
-                self.logger.info(
-                    f"Reader {reader_id}: {files_read} files in {reader_total:.2f}s"
-                )
-                self.logger.info(
-                    f"  SGA open:      {sga_open_time:.2f}s ({sga_open_time/reader_total*100:.1f}%)"
-                )
-                self.logger.info(
-                    f"  File open:     {total_open_time:.2f}s ({total_open_time/reader_total*100:.1f}%) - {total_open_time/files_read*1000:.2f}ms/file"
-                )
-                self.logger.info(
-                    f"  File read:     {total_read_time:.2f}s ({total_read_time/reader_total*100:.1f}%) - {total_read_time/files_read*1000:.2f}ms/file"
-                )
-                self.logger.info(
-                    f"  Queue ops:     {total_queue_time:.2f}s ({total_queue_time/reader_total*100:.1f}%)"
-                )
-                self.logger.info(
-                    f"  Other overhead: {overhead:.2f}s ({overhead/reader_total*100:.1f}%)"
-                )
-
-                # Decrement active reader count
-                with processing_lock:
-                    active_readers[0] -= 1
-                    if active_readers[0] == 0:
-                        readers_done.set()
-                        timings["reader_total"] = reader_total
-                        timings["reader_open_time"] = total_open_time
-                        timings["reader_read_time"] = total_read_time
-                        timings["reader_sga_open"] = sga_open_time
-
-        def writer_thread() -> None:
-            """Multiple threads: write files from deque to disk."""
-            local_wait_time: float = 0
-            local_write_time: float = 0
-            local_files: int = 0
-
-            while not readers_done.is_set() or file_deque:
-                # Try to get item from deque
-                t_wait = time_module.perf_counter()
-                with deque_not_empty:
-                    while not file_deque and not readers_done.is_set():
-                        deque_not_empty.wait(0.01)
-
-                    if not file_deque:
-                        break
-
-                    item = file_deque.popleft()
-                    deque_not_empty.notify()
-                local_wait_time += time_module.perf_counter() - t_wait
-
-                file_path, data, error = item
-
-                if error:
-                    with processing_lock:
-                        self.stats.failed_files += 1
-                        total_processed[0] += 1
-                    continue
-
-                try:
-                    # Write to disk (LOW-LEVEL for speed!)
-                    t_write = time_module.perf_counter()
-                    dst_path = Path(output_dir) / file_path.lstrip("/")
-                    # Skip directory check - already pre-created!
-
-                    # Use os.write() for maximum speed (no Python buffering overhead)
-                    fd = os.open(
-                        dst_path,
-                        OSFlags.O_WRONLY | OSFlags.O_CREAT | OSFlags.O_TRUNC,
-                        0o644,
-                    )
-                    try:
-                        os.write(fd, data)  # type: ignore
-                        # Skip fsync for MAXIMUM SPEED (trades safety for performance)
-                    finally:
-                        os.close(fd)
-                    local_write_time += time_module.perf_counter() - t_write
-                    local_files += 1
-
-                    with processing_lock:
-                        self.stats.extracted_files += 1
-                        self.stats.extracted_bytes += len(data)  # type: ignore
-                        total_processed[0] += 1
-
-                        if on_progress and total_processed[0] % 500 == 0:
-                            on_progress(total_processed[0], self.stats.total_files)
-
-                except Exception as e:
-                    with processing_lock:
-                        self.stats.failed_files += 1
-                        total_processed[0] += 1
-                        if self.stats.failed_files <= 10:
-                            self.logger.error(f"Failed to write {file_path}: {e}")
-
-            # Update global writer stats
-            with writer_stats_lock:
-                writer_stats["total_wait_time"] += local_wait_time
-                writer_stats["total_write_time"] += local_write_time
-                writer_stats["files_written"] += local_files
-
-        # Start multiple readers (each with their own SGA handle!)
-        extraction_start = time_module.perf_counter()
-        readers = []
-        for i in range(num_readers):
-            r = threading.Thread(
-                target=reader_thread, args=(reader_file_lists[i], i), daemon=True
-            )
-            r.start()
-            readers.append(r)
-
-        # Start writers
-        writers = []
-        for _ in range(num_writers):
-            w = threading.Thread(target=writer_thread, daemon=True)
-            w.start()
-            writers.append(w)
-
-        # Wait for completion
-        for r in readers:
-            r.join()
-        for w in writers:
-            w.join()
-        timings["extraction_total"] = time_module.perf_counter() - extraction_start
-
-        # Final progress
-        if on_progress:
-            on_progress(total_processed[0], self.stats.total_files)
-
-        # RE-ENABLE GARBAGE COLLECTION
-        if gc_was_enabled:
-            gc.enable()
-            self.logger.info("Re-enabled GC")
-
-        # Force one GC cycle to clean up
-        gc.collect()
-
-        # Summary
-        self.logger.info("Extraction complete!")
-        self.logger.info(f"  Total:      {self.stats.total_files}")
-        self.logger.info(f"  Successful: {self.stats.extracted_files}")
-        self.logger.info(f"  Failed:     {self.stats.failed_files}")
-        self.logger.info(
-            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
-        )
-
-        # DETAILED TIMING BREAKDOWN
-        self.logger.info("")
-        self.logger.info("=" * 70)
-        self.logger.info("PERFORMANCE BREAKDOWN")
-        self.logger.info("=" * 70)
-        self.logger.info(
-            f"File listing:       {timings['file_listing']:.2f}s ({timings['file_listing']/timings['extraction_total']*100:.1f}%)"
-        )
-        self.logger.info(
-            f"Directory creation: {timings['dir_creation']:.2f}s ({timings['dir_creation']/timings['extraction_total']*100:.1f}%)"
-        )
-        self.logger.info(f"GC disable:         {timings['gc_disable']:.3f}s")
-        self.logger.info("")
-        self.logger.info("READER THREAD (DETAILED):")
-        self.logger.info(
-            f"  Total time:       {timings['reader_total']:.2f}s ({timings['reader_total']/timings['extraction_total']*100:.1f}%)"
-        )
-        self.logger.info(
-            f"    - SGA open:     {timings.get('reader_sga_open', 0):.2f}s"
-        )
-        self.logger.info(
-            f"    - File opens:   {timings.get('reader_open_time', 0):.2f}s ({timings.get('reader_open_time', 0)/self.stats.total_files*1000:.2f}ms/file)"
-        )
-        self.logger.info(
-            f"    - File reads:   {timings.get('reader_read_time', 0):.2f}s ({timings.get('reader_read_time', 0)/self.stats.total_files*1000:.2f}ms/file)"
-        )
-        self.logger.info("")
-        self.logger.info(f"WRITER THREADS ({num_writers} parallel):")
-        avg_write_per_file = (
-            writer_stats["total_write_time"] / writer_stats["files_written"]
-            if writer_stats["files_written"] > 0
-            else 0
-        )
-        self.logger.info(
-            f"  Total write time: {writer_stats['total_write_time']:.2f}s (across all threads)"
-        )
-        self.logger.info(
-            f"  Total wait time:  {writer_stats['total_wait_time']:.2f}s (across all threads)"
-        )
-        self.logger.info(f"  Avg per file:     {avg_write_per_file*1000:.2f}ms")
-        self.logger.info("")
-        self.logger.info(f"EXTRACTION PHASE:   {timings['extraction_total']:.2f}s")
-        self.logger.info(f"TOTAL TIME:         {sum(timings.values()):.2f}s")
-        self.logger.info("=" * 70)
-
-        # Calculate bottleneck
-        if timings["reader_total"] > writer_stats["total_write_time"] / num_writers:
-            bottleneck = "READER (SGA reading from fs library)"
-        else:
-            bottleneck = "WRITERS (disk I/O)"
-        self.logger.info(f"BOTTLENECK: {bottleneck}")
-        self.logger.info("=" * 70)
-
-        return self.stats
 
     def extract_ultra_fast(
         self,
@@ -986,18 +629,12 @@ class AdvancedParallelUnpacker:
 
         Expected: 2-3x faster than single-reader streaming!
         """
-        if not NATIVE_READER_AVAILABLE:
-            self.logger.warning(
-                "Native reader not available, falling back to extract_streaming"
-            )
-            return self.extract_streaming(sga_path, output_dir, on_progress)
-
         self.logger.info(f"Starting NATIVE MULTI-READER extraction: {sga_path}")
         self.stats = ExtractionStats()
 
         # Get file list using native reader
         self.logger.info("Collecting file paths...")
-        native_reader = NativeSGAReader(sga_path)
+        native_reader = NativeReaderV2(sga_path)
         file_paths = native_reader.list_files()
         native_reader.close()
 
@@ -1057,7 +694,7 @@ class AdvancedParallelUnpacker:
             """Thread-local SGA handle reader."""
             try:
                 # Each reader creates its own NativeSGAReader with thread-local handle
-                reader = NativeSGAReader(sga_path)
+                reader = NativeReaderV2(sga_path)
                 for file_path in file_list:
                     try:
                         data = reader.read_file(file_path)
@@ -1187,7 +824,6 @@ class AdvancedParallelUnpacker:
         from concurrent.futures import ThreadPoolExecutor
         import time as time_module
         from pathlib import Path
-        from .native_reader import NativeSGAReader
 
         self.logger.info(f"Starting NATIVE ULTRA-FAST extraction: {sga_path}")
         self.stats = ExtractionStats()
@@ -1195,7 +831,7 @@ class AdvancedParallelUnpacker:
         # Parse SGA
         t0 = time_module.perf_counter()
         self.logger.info("Parsing SGA binary format...")
-        reader = NativeSGAReader(sga_path, verbose=False)
+        reader = NativeReaderV2(sga_path, verbose=False)
         files = reader.list_files()
         t_parse = time_module.perf_counter() - t0
 
@@ -1560,25 +1196,6 @@ class AdvancedParallelUnpacker:
         consumer_thread = Thread(target=consumer, daemon=True)
         consumer_thread.start()
 
-        # Modified callback to queue results
-        def modified_extract(
-            sga_p: str, out_dir: str, entry: FileEntry, dst_path: str
-        ) -> tuple[bool, str, str | None]:
-            success, path, error = self._extract_file_isolated(
-                sga_p, out_dir, entry, dst_path
-            )
-
-            if success:
-                # Read file data and queue it
-                try:
-                    with open_fs(out_dir, writeable=True) as out_fs:
-                        with out_fs.open(dst_path, "rb") as f:
-                            file_data = f.read()
-                        result_queue.put((path, file_data))
-                except Exception as e:
-                    self.logger.error(f"Could not read extracted file {path}: {e}")
-
-            return success, path, error
 
         # Extract (using modified extraction that queues results)
         # For simplicity, just use standard extraction
@@ -1605,14 +1222,14 @@ class AdvancedParallelUnpacker:
         Returns:
             Dictionary with extraction plan details
         """
-        native_sga = NativeSgaV2(sga_path)
-        entries = native_sga._collect_file_metadata()
+        native_sga = NativeReaderV2(sga_path)
+        entries = list(native_sga._files.values())
 
-        categories = self._categorize_by_size(entries)
+        categories = _categorize_by_size(entries,logger=self.logger)
 
         plan = ExtractionPlan(
             total_files=len(entries),
-            total_bytes=sum(e.size for e in entries),
+            total_bytes=sum(e.decompressed_size for e in entries),
             categories=dict(),
             estimated_time_seconds=0,
             recommended_workers=self.num_workers,
@@ -1623,7 +1240,7 @@ class AdvancedParallelUnpacker:
                 continue
 
             workers = self._get_optimal_workers(cat, len(files))
-            total_bytes = sum(f.size for f in files)
+            total_bytes = sum(f.decompressed_size for f in files)
 
             plan.categories[cat] = ExtractionPlanCategory(
                 file_count=len(files),

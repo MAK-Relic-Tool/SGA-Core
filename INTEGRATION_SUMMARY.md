@@ -100,10 +100,6 @@ relic sga unpack archive.sga ./output --isolate
 # Use the advanced parallel unpacker
 from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker
 
-# Standard extraction (still fast)
-unpacker = AdvancedParallelUnpacker(num_workers=4)
-stats = unpacker.extract_streaming(sga_path, output_dir)
-
 # Fast extraction (86x faster!)
 unpacker = AdvancedParallelUnpacker(num_workers=15)
 stats = unpacker.extract_native_fast(sga_path, output_dir)

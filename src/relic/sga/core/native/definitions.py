@@ -1,30 +1,22 @@
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass
 from typing import Optional, List
 
 
-@dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
+
+@dataclass(slots=True)
 class FileEntry:
-    """Metadata for a single file in the archive."""
+    """File entry with absolute byte offset in SGA file."""
 
     path: str
-    size: int
+    data_offset: int  # Absolute byte offset in .sga file
     compressed_size: int
-    storage_type: str  # 'store', 'zlib', etc.
-    checksum: Optional[str] = None
+    decompressed_size: int
+    storage_type: int  # 0=uncompressed, 1/2=zlib
+    modified:datetime.datetime|None = Noned
 
-    @property
-    def compression_ratio(self) -> float:
-        """Calculate compression ratio."""
-        if self.compressed_size == 0:
-            return 1.0
-        return self.size / self.compressed_size
-
-    @property
-    def is_compressed(self) -> bool:
-        """Check if file is compressed."""
-        return self.storage_type.lower() != "store"
 
 
 @dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
@@ -53,14 +45,3 @@ class ExtractionPlanCategory:
     file_count: int
     total_bytes: int
     workers: int
-
-class NativeSga:
-    """
-    An abstraction that bridges the difference between schemas for native SGA operations
-    """
-
-
-    def _collect_file_metadata(
-        self, base_path: str = "/"
-    ) -> List[FileEntry]:
-        raise NotImplementedError
