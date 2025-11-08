@@ -26,7 +26,7 @@ from relic.core.cli import (
     get_dir_type_validator,
     get_path_validator,
 )
-from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker
+from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker, UnpackerConfig
 
 _SUCCESS = 0
 _FAIL = 1
@@ -142,9 +142,7 @@ class RelicSgaUnpackCli(CliPlugin):
                     num_workers = max(1, multiprocessing.cpu_count() - 1)
 
                 logger.info(f"Using Fast native extraction ({num_workers} workers)")
-                unpacker = AdvancedParallelUnpacker(
-                    num_workers=num_workers, enable_delta=False, logger=logger
-                )
+                unpacker = AdvancedParallelUnpacker(UnpackerConfig(num_workers=num_workers, enable_delta=False, logger=logger))
 
                 # Progress callback
                 def _progress(current: int, total: int) -> None:

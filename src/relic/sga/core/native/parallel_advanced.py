@@ -15,7 +15,6 @@ import gc
 import hashlib
 import json
 import logging
-import math
 import multiprocessing
 import os
 import threading
@@ -25,8 +24,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum, IntEnum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple, Any, Generator, Sequence
+from typing import Callable, Dict, List, Optional, Set, Any, Generator, Sequence
 
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from relic.core.logmsg import BraceMessage
 
 from relic.sga.core.definitions import OSFlags
@@ -41,6 +42,7 @@ from relic.sga.core.native.definitions import (
 )
 from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
+
 
 class FileCategory(StrEnum):
     Tiny = "tiny"
@@ -98,7 +100,7 @@ def _categorize_by_size(
 
 
 class _ExtractStrategy:
-    def __init__(self, config: Config, cache: DirectoryCacher):
+    def __init__(self, config: UnpackerConfig, cache: DirectoryCacher):
         self.stats: ExtractionStats = None  # type: ignore
         self.cache = cache
 
@@ -226,21 +228,21 @@ class _ExtractStrategy:
 
     def _execute_batches(
         self, batches: List[List[FileEntry]], executor:ThreadPoolExecutor, sga_path: str, output_dir: str
-    ) -> Dict[Future[BatchResult],List[FileEntry]]:
-        futures = {}
+    ) -> list[Future[list[BatchResult]]]:
+        futures = []
         for batch in batches:
             dst_paths = [entry.path for entry in batch]
-            future = executor.submit(
+            future:Future[list[BatchResult]] = executor.submit(
                 self._extract_batch_isolated,
                 sga_path,
                 output_dir,
                 batch,
                 dst_paths,
             )
-            futures[future] = batch
+            futures.append(future)
         return futures
 
-    def _parse_batch_results(self, futures, on_progress):
+    def _parse_batch_results(self, futures:list[Future[list[BatchResult]]], on_progress:Callable[[int,int],None]|None=None) -> None:
         total_processed = 0
         for future in as_completed(futures):
             results = future.result()
@@ -258,11 +260,11 @@ class _ExtractStrategy:
                 if on_progress and total_processed % 500 == 0:
                     on_progress(total_processed, self.stats.total_files)
 
-            # Final progress callback
-            if on_progress:
-                on_progress(total_processed, self.stats.total_files)
+        # Final progress callback
+        if on_progress:
+            on_progress(total_processed, self.stats.total_files)
 
-    def _print_summary(self):
+    def _print_summary(self) -> None:
         self.logger.info("Extraction complete!")
         self.logger.info(f"  Total:      {self.stats.total_files}")
         self.logger.info(f"  Successful: {self.stats.extracted_files}")
@@ -272,7 +274,7 @@ class _ExtractStrategy:
         )
 
     @contextmanager
-    def _disable_gc(self):
+    def _disable_gc(self) -> Generator[None, Any, None]:
         gc_was_enabled = gc.isenabled()
         if gc_was_enabled:
             gc.disable()
@@ -289,7 +291,7 @@ class _ExtractStrategy:
 
         t0 = time_module.perf_counter()
 
-        def delta():
+        def delta() -> float:
             return time_module.perf_counter() - t0
 
         yield delta
@@ -632,9 +634,6 @@ class NativeUltraFastStrategy(_ExtractStrategy):
 
         Target: 2-3 seconds for 7,815 files!
         """
-        from concurrent.futures import ThreadPoolExecutor
-        import time as time_module
-        from pathlib import Path
 
         self._start("NATIVE-ULTRA-FAST", sga_path)
 
@@ -734,7 +733,7 @@ class NativeUltraFastStrategy(_ExtractStrategy):
 
 
 @dataclass
-class Config(slots=True):
+class UnpackerConfig(slots=True):
     num_workers: Optional[int] = None
     logger: Optional[logging.Logger] = None
     enable_adaptive_threading: bool = True
@@ -786,7 +785,7 @@ class AdvancedParallelUnpacker:
 
     def __init__(
         self,
-        config:Config
+        config:UnpackerConfig
     ):
         """Initialize advanced parallel unpacker.
 
@@ -1139,14 +1138,14 @@ class AdvancedParallelUnpacker:
         """
         entries = NativeParserV2(sga_path).parse()
 
-        categories = _categorize_by_size(entries, logger=self.logger)
-
+        categories = _categorize_by_size(entries, logger=self._config.logger)
+        num_workers = self._config.num_workers or 0
         plan = ExtractionPlan(
             total_files=len(entries),
             total_bytes=sum(e.decompressed_size for e in entries),
             categories={},
             estimated_time_seconds=0,
-            recommended_workers=self._config.num_workers,
+            recommended_workers=num_workers,
         )
 
         for cat, files in categories.items():
@@ -1166,7 +1165,7 @@ class AdvancedParallelUnpacker:
         # Assume ~50 MB/s extraction rate per worker
         throughput_per_worker = 50 * 1024 * 1024  # 50 MB/s
         effective_throughput = (
-            throughput_per_worker * self._config.num_workers * 0.7
+            throughput_per_worker * num_workers * 0.7
         )  # 70% efficiency
         plan.estimated_time_seconds = plan.total_bytes / effective_throughput
 
