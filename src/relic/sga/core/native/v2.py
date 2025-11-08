@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import mmap
-import os
 import struct
-import zlib
-from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Tuple, BinaryIO, List, Optional, Any, Literal
+from typing import Dict, BinaryIO, Any
 
-from relic.sga.core.definitions import OSFlags, StorageType
+from relic.sga.core.definitions import StorageType, Version
+from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.native.definitions import FileEntry
 
 
@@ -44,21 +41,27 @@ class NativeParserV2:
         if self.verbose:
             print(f"[Parser] {msg}")  # TODO use logger
 
-
-    def _parse_toc_pair(self, f:BinaryIO) -> tuple[int,int]:
+    def _parse_toc_pair(self, f: BinaryIO) -> tuple[int, int]:
         offset = struct.unpack("<I", f.read(4))[0]
         count = struct.unpack("<H", f.read(2))[0]
         return offset, count
 
-
-    def _parse_toc(self, f:BinaryIO) -> tuple[int,int,int,int,int,int,int,int]:
+    def _parse_toc(self, f: BinaryIO) -> tuple[int, int, int, int, int, int, int, int]:
         (dO, dC) = self._parse_toc_pair(f)
-        (foldO, foldC)  = self._parse_toc_pair(f)
+        (foldO, foldC) = self._parse_toc_pair(f)
         (fileO, fileC) = self._parse_toc_pair(f)
         (nameO, nameC) = self._parse_toc_pair(f)
         return dO, dC, foldO, foldC, fileO, fileC, nameO, nameC
 
-    def _parse_names(self, f:BinaryIO, drive_offset:int, folder_offset:int, file_offset:int, name_offset:int, toc_size:int) -> Dict[int,str]:
+    def _parse_names(
+        self,
+        f: BinaryIO,
+        drive_offset: int,
+        folder_offset: int,
+        file_offset: int,
+        name_offset: int,
+        toc_size: int,
+    ) -> Dict[int, str]:
         toc_base = 180
         # Parse string table FIRST (names are stored here!)
         self._log("Parsing string table...")
@@ -80,8 +83,9 @@ class NativeParserV2:
             running_index += len(name) + 1
         return names
 
-
-    def _parse_drives(self, f:BinaryIO, drive_offset:int, drive_count:int) -> list[dict[str,Any]]:
+    def _parse_drives(
+        self, f: BinaryIO, drive_offset: int, drive_count: int
+    ) -> list[dict[str, Any]]:
         toc_base = 180
         # Parse drives (138 bytes each)
         self._log("Parsing drives...")
@@ -109,8 +113,13 @@ class NativeParserV2:
             self._log(f"  Drive: {name} (root folder: {root_folder})")
         return drives
 
-
-    def _parse_folders(self, f:BinaryIO, folder_offset:int, folder_count:int, string_table:dict[int,str]) -> list[dict[str,Any]]:
+    def _parse_folders(
+        self,
+        f: BinaryIO,
+        folder_offset: int,
+        folder_count: int,
+        string_table: dict[int, str],
+    ) -> list[dict[str, Any]]:
         toc_base = 180
 
         # Parse folders (12 bytes each)
@@ -134,7 +143,13 @@ class NativeParserV2:
             )
         return folders
 
-    def _parse_files(self, f:BinaryIO, file_offset:int, file_count:int, string_table:dict[int,str]) -> list[dict[str, Any]]:
+    def _parse_files(
+        self,
+        f: BinaryIO,
+        file_offset: int,
+        file_count: int,
+        string_table: dict[int, str],
+    ) -> list[dict[str, Any]]:
         toc_base = 180
         # Parse files (20 bytes each)
         self._log(f"Parsing {file_count} files...")
@@ -167,7 +182,6 @@ class NativeParserV2:
                 )
         return files
 
-
     def _parse_sga_binary(self) -> None:  # TODO; move to v2
         """Parse SGA V2 binary format manually."""
         self._log(f"Opening {self.sga_path}...")
@@ -182,12 +196,11 @@ class NativeParserV2:
 
             # Read version
             major, minor = struct.unpack("<HH", f.read(4))
+            version = Version(major, minor)
             self._log(f"SGA Version: {major}.{minor}")
-
-            if major != 2:
-                raise ValueError(
-                    f"Only SGA V2 supported, got V{major}.{minor}"
-                )  # TODO: Use VersionNotSupportedError
+            VERSION = Version(2,0)
+            if version != VERSION:
+                raise VersionNotSupportedError(version,[VERSION])
 
             # Read header (SGA V2 header is 180 bytes total, TOC starts at 180)
             # The actual offsets are 12 bytes later than documented:
@@ -207,7 +220,16 @@ class NativeParserV2:
             # Parse TOC Header
             # Format: drive_pos(4), drive_count(2), folder_pos(4), folder_count(2),
             #         file_pos(4), file_count(2), name_pos(4), name_count(2)
-            drive_offset, drive_count, folder_offset, folder_count, file_offset, file_count, name_offset, name_count = self._parse_toc(f)
+            (
+                drive_offset,
+                drive_count,
+                folder_offset,
+                folder_count,
+                file_offset,
+                file_count,
+                name_offset,
+                name_count,
+            ) = self._parse_toc(f)
 
             self._log(
                 f"TOC: {drive_count} drives, {folder_count} folders, {file_count} files, {name_count} strings"
@@ -216,10 +238,12 @@ class NativeParserV2:
             # TOC base is at 180
             toc_base = 180
 
-            string_table = self._parse_names(f, drive_offset, folder_offset, file_offset, name_offset, toc_size)
-            drives = self._parse_drives(f,drive_offset, drive_count)
-            folders = self._parse_folders(f,folder_offset, folder_count, string_table)
-            files = self._parse_files(f,file_offset,file_count,string_table)
+            string_table = self._parse_names(
+                f, drive_offset, folder_offset, file_offset, name_offset, toc_size
+            )
+            drives = self._parse_drives(f, drive_offset, drive_count)
+            folders = self._parse_folders(f, folder_offset, folder_count, string_table)
+            files = self._parse_files(f, file_offset, file_count, string_table)
 
             # Build file map
             self._log("Building file map...")
@@ -289,10 +313,3 @@ class NativeParserV2:
             self._parse_sga_binary()
 
         return list(self._files.values())
-
-
-
-
-
-
-

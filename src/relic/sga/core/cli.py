@@ -60,7 +60,6 @@ class RelicSgaUnpackCli(CliPlugin):
             Manually specify the flags to override this behaviour.
             """
 
-
         if command_group is None:
             parser = RelicArgParser("unpack", description=desc)
         else:
@@ -112,7 +111,6 @@ class RelicSgaUnpackCli(CliPlugin):
 
         return parser
 
-
     def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
         infile: str = ns.src_sga
         outdir: str = ns.out_dir
@@ -127,13 +125,11 @@ class RelicSgaUnpackCli(CliPlugin):
             raise relic.core.cli.RelicArgParserError(
                 "Isolate and Merge flags are mutually exclusive"
             )
-        if use_legacy and should_fallback:# pragma: nocover
+        if use_legacy and should_fallback:  # pragma: nocover
             # This error should be impossible
             raise relic.core.cli.RelicArgParserError(
                 "Legacy and NoLegacy flags are mutually exclusive"
             )
-
-
 
         logger.info(f"Unpacking `{infile}`")
 
@@ -157,9 +153,7 @@ class RelicSgaUnpackCli(CliPlugin):
                             f"  Progress: {current}/{total} files ({current*100//total}%)"
                         )
 
-                stats = unpacker.extract(
-                    infile, outdir, on_progress=_progress
-                )
+                stats = unpacker.extract(infile, outdir, on_progress=_progress)
 
                 logger.info(
                     f"Extraction complete: {stats.extracted_files} files extracted"

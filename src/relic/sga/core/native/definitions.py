@@ -15,7 +15,7 @@ class FileEntry:
     compressed_size: int
     decompressed_size: int
     storage_type: StorageType
-    modified:datetime.datetime|None = None
+    modified: datetime.datetime | None = None
 
 
 @dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
@@ -45,22 +45,25 @@ class ExtractionPlanCategory:
     total_bytes: int
     workers: int
 
+
 @dataclass(slots=True)
 class ReadResult:
 
     path: str
     data: bytes
-    error: str|None = None
+    error: str | None = None
+
 
 @dataclass(slots=True)
 class WriteResult:
 
     path: str
     success: bool
-    error: str|None = None
+    error: str | None = None
+
 
 @dataclass(slots=True)
 class ChecksumResult:
     path: str
-    checksum: str|None
-    error: str|None = None
+    checksum: str | None
+    error: str | None = None

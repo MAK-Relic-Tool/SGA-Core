@@ -18,26 +18,40 @@ import logging
 import multiprocessing
 import os
 import threading
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-
-from relic.sga.core.definitions import OSFlags, StorageType
+from relic.sga.core.definitions import OSFlags
 from relic.sga.core.native.definitions import (
     FileEntry,
     ExtractionStats,
     ExtractionPlan,
-    ExtractionPlanCategory, WriteResult, ReadResult, ChecksumResult,
+    ExtractionPlanCategory,
+    WriteResult,
+    ReadResult,
+    ChecksumResult,
 )
 from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
 
 
+# TODO; restore Streaming Native via git history
+# When i was axing everything I misunderstood that they were ALTERNATIVES
+# For my own personal clarity; i'm going to move them to a Strategy Pattern (with a config-accpeting base class)
+# with any luck, the strategy pattern can help simplify the cli/logging aspects
+
+class FileCategory(StrEnum):
+    Tiny = "tiny"
+    Small = "small"
+    Medium = "medium"
+    Large = "large"
+    Huge = "huge"
+
+
 def _categorize_by_size(
-    entries: List[FileEntry],
-    logger:logging.Logger
+    entries: List[FileEntry], logger: logging.Logger
 ) -> Dict[str, List[FileEntry]]:
     SIZE_TINY = 10 * 1024  # 10KB
     SIZE_SMALL = 1024 * 1024  # 1MB
@@ -85,7 +99,6 @@ def _categorize_by_size(
 
 class AdvancedParallelUnpacker:
     """Advanced parallel unpacker with comprehensive optimizations."""
-
 
     # Batching thresholds
     TINY_FILE_BATCH_SIZE = 100
@@ -140,8 +153,6 @@ class AdvancedParallelUnpacker:
             if dir_str not in self._dir_cache:
                 dir_path.mkdir(parents=True, exist_ok=True)
                 self._dir_cache.add(dir_str)
-
-
 
     def _get_optimal_workers(self, category: str, file_count: int) -> int:
         """Calculate optimal worker count for file category.
@@ -209,7 +220,6 @@ class AdvancedParallelUnpacker:
             f"Batched {len(entries)} tiny files into {len(batches)} batches"
         )
         return batches
-
 
     def _extract_batch_isolated(
         self,
@@ -314,7 +324,6 @@ class AdvancedParallelUnpacker:
         self.stats.total_files = len(entries)
         self.logger.info(f"Found {len(entries)} files")
 
-
         # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
         self.logger.info("Pre-creating directory structure...")
         unique_dirs = set()
@@ -391,7 +400,6 @@ class AdvancedParallelUnpacker:
 
         return self.stats
 
-
     def extract_ultra_fast(
         self,
         sga_path: str,
@@ -452,8 +460,7 @@ class AdvancedParallelUnpacker:
         # Batch files
         batch_size = 50
         file_batches = [
-            files[i : i + batch_size]
-            for i in range(0, len(files), batch_size)
+            files[i : i + batch_size] for i in range(0, len(files), batch_size)
         ]
         self.logger.info(
             f"Processing {len(file_batches)} batches of {batch_size} files"
@@ -541,7 +548,6 @@ class AdvancedParallelUnpacker:
 
         return self.stats
 
-
     def extract(
         self,
         sga_path: str,
@@ -626,7 +632,7 @@ class AdvancedParallelUnpacker:
                 return WriteResult(path, False, str(e))
 
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            write_results:List[WriteResult] = list(executor.map(write_file, results))
+            write_results: List[WriteResult] = list(executor.map(write_file, results))
 
         t_write = time_module.perf_counter() - t0
 
@@ -642,7 +648,9 @@ class AdvancedParallelUnpacker:
                         break
             else:
                 self.stats.failed_files += 1
-                self.logger.error(f"Failed to write {write_result.path}: {write_result.error}")
+                self.logger.error(
+                    f"Failed to write {write_result.path}: {write_result.error}"
+                )
 
         # Re-enable GC
         if gc_was_enabled:
@@ -742,12 +750,14 @@ class AdvancedParallelUnpacker:
 
             processed = 0
             for future in as_completed(futures):
-                result:ChecksumResult = future.result()
+                result: ChecksumResult = future.result()
 
                 if result.checksum:
                     manifest[result.path] = result.checksum
                 else:
-                    self.logger.warning(f"Could not checksum {result.path}: {result.error}")
+                    self.logger.warning(
+                        f"Could not checksum {result.path}: {result.error}"
+                    )
 
                 processed += 1
                 if processed % 1000 == 0:
@@ -932,7 +942,6 @@ class AdvancedParallelUnpacker:
         consumer_thread = Thread(target=consumer, daemon=True)
         consumer_thread.start()
 
-
         # Extract (using modified extraction that queues results)
         # For simplicity, just use standard extraction
         # In production, would integrate queue into extract_optimized
@@ -960,12 +969,12 @@ class AdvancedParallelUnpacker:
         """
         entries = NativeParserV2(sga_path).parse()
 
-        categories = _categorize_by_size(entries,logger=self.logger)
+        categories = _categorize_by_size(entries, logger=self.logger)
 
         plan = ExtractionPlan(
             total_files=len(entries),
             total_bytes=sum(e.decompressed_size for e in entries),
-            categories=dict(),
+            categories={},
             estimated_time_seconds=0,
             recommended_workers=self.num_workers,
         )

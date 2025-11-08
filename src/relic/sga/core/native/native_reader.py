@@ -32,26 +32,32 @@ class SgaReader:
     These three keys allow us to quickly read raw sga files and decompress them if needed
     """
 
-    def __init__(self,sga_path:str):
+    def __init__(self, sga_path: str):
         self._sga_path = sga_path
-        self._mmap_handle:mmap.mmap = None # type: ignore
-        self._file_handle:int = None # type: ignore
+        self._mmap_handle: mmap.mmap = None  # type: ignore
+        self._file_handle: int = None  # type: ignore
 
-
-    def read_buffer(self,entry:FileEntry, decompress:bool=True) -> bytes:
-        raw = self._mmap_handle[entry.data_offset:entry.data_offset+entry.compressed_size]
+    def read_buffer(self, entry: FileEntry, decompress: bool = True) -> bytes:
+        raw = self._mmap_handle[
+            entry.data_offset : entry.data_offset + entry.compressed_size
+        ]
         if not decompress:
             return raw
         if entry.storage_type in [StorageType.STORE]:
             return raw
-        elif entry.storage_type in [StorageType.BUFFER_COMPRESS, StorageType.STREAM_COMPRESS]:
+        elif entry.storage_type in [
+            StorageType.BUFFER_COMPRESS,
+            StorageType.STREAM_COMPRESS,
+        ]:
             zlib_buffer = zlib.decompress(raw)
             if len(zlib_buffer) != entry.decompressed_size:
-                raise MismatchError("size mismatch", len(zlib_buffer), entry.decompressed_size) # TODO
+                raise MismatchError(
+                    "size mismatch", len(zlib_buffer), entry.decompressed_size
+                )  # TODO
             return zlib_buffer
-        raise NotImplementedError # TODO
+        raise NotImplementedError  # TODO
 
-    def read_file(self,entry:FileEntry, decompress:bool=True) -> BytesIO:
+    def read_file(self, entry: FileEntry, decompress: bool = True) -> BytesIO:
         return BytesIO(self.read_buffer(entry, decompress))
 
     def read_files_parallel(
@@ -71,7 +77,6 @@ class SgaReader:
 
         return results
 
-
     def open(self) -> None:
         """Open memory-mapped access."""
         if self._mmap_handle is None:
@@ -86,14 +91,14 @@ class SgaReader:
         """Close memory-mapped access."""
         if self._mmap_handle:
             self._mmap_handle.close()
-            self._mmap_handle = None # type: ignore
+            self._mmap_handle = None  # type: ignore
         if self._file_handle is not None:
             os.close(self._file_handle)
-            self._file_handle = None # type: ignore
+            self._file_handle = None  # type: ignore
 
     def __enter__(self) -> SgaReader:
         self.open()
         return self
 
-    def __exit__(self, exc_type:Any, exc_val:Any, exc_tb:Any) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
