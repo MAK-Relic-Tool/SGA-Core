@@ -345,16 +345,17 @@ class RelicSgaVersionCli(CliPlugin):
             with open(sga_file, "rb") as sga:
                 if not MAGIC_WORD.check(sga, advance=True):
                     logger.warning("File is not an SGA")
+                    return _FAIL
                 else:
                     version = VersionSerializer.read(sga)
                     logger.info(version)
+                    return _SUCCESS
         except IOError:  # pragma: nocover
             # I don't know how to force an io error here for coverage testing
             # we safely handle bad file paths
             # So I believe this only occurs when a genuine fatal error occurs
             logger.error("Error reading file")
             raise
-        return None
 
 
 class RelicSgaListCli(CliPlugin):
