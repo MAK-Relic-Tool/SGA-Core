@@ -17,171 +17,23 @@ import json
 import logging
 import multiprocessing
 import os
-import struct
 import threading
-import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, BinaryIO
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from fs import open_fs
 from fs.base import FS
 
 from relic.sga.core.definitions import OSFlags
-
-# Import native SGA reader for Phase 2 optimization
-try:
-    from relic.sga.core.native_reader import NativeSGAReader
-
-    NATIVE_READER_AVAILABLE = True
-except ImportError:
-    NATIVE_READER_AVAILABLE = False
-
-
-@dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
-class FileEntry:
-    """Metadata for a single file in the archive."""
-
-    path: str
-    size: int
-    compressed_size: int
-    storage_type: str  # 'store', 'zlib', etc.
-    checksum: Optional[str] = None
-
-    @property
-    def compression_ratio(self) -> float:
-        """Calculate compression ratio."""
-        if self.compressed_size == 0:
-            return 1.0
-        return self.size / self.compressed_size
-
-    @property
-    def is_compressed(self) -> bool:
-        """Check if file is compressed."""
-        return self.storage_type.lower() != "store"
-
-
-@dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
-class ExtractionStats:
-    """Statistics for extraction operation."""
-
-    total_files: int = 0
-    extracted_files: int = 0
-    failed_files: int = 0
-    total_bytes: int = 0
-    extracted_bytes: int = 0
-    skipped_files: int = 0
-
-
-@dataclass(slots=True)
-class ExtractionPlan:
-    total_files: int
-    total_bytes: int
-    categories: dict[str, ExtractionPlanCategory]
-    estimated_time_seconds: float
-    recommended_workers: int
-
-
-@dataclass(slots=True)
-class ExtractionPlanCategory:
-    file_count: int
-    total_bytes: int
-    workers: int
-
-
-class DirectSGAReader:
-    """ULTRA-FAST direct binary SGA reader - bypasses fs abstraction!
-
-    This reads the SGA format directly for MAXIMUM SPEED:
-    - No virtual filesystem overhead
-    - No path resolution
-    - Direct binary reads
-    - Inline decompression
-    """
-
-    def __init__(self, sga_path: str):
-        self.sga_path = sga_path
-        self._file_map: Dict[str, Tuple[int, int, int, int]] = (
-            {}
-        )  # path -> (offset, compressed_size, decompressed_size, storage_type)
-
-    def _parse_header(self, f: BinaryIO) -> tuple[int, int]:
-        """Parse SGA header to get TOC and data offsets."""
-        # Read magic word (8 bytes) + version (4 bytes)
-        magic = f.read(8)
-        if magic != b"_ARCHIVE":
-            raise ValueError("Not a valid SGA file")  # TODO Magic Error
-
-        version = struct.unpack("<HH", f.read(4))  # major, minor
-
-        # Skip to TOC offset (varies by version, but we can use fs to get it first time)
-        # For now, use fs once to build file map, then use direct reads
-        return version
-
-    def build_file_map(self) -> list[str]:
-        """Build a map of file paths to their byte offsets (one-time cost)."""
-        # Use fs ONCE to build the map, then never again!
-        with open_fs(self.sga_path, default_protocol="sga") as sga:
-            for file_path in sga.walk.files():
-                # Get file info via fs (slow, but only once!)
-                info = sga.getinfo(file_path)
-                # Store: offset, compressed_size, decompressed_size, storage_type
-                # Note: fs doesn't expose these directly, so we'll use a hybrid approach
-                self._file_map[file_path] = (0, 0, info.size, 0)  # placeholder
-
-        return list(self._file_map.keys())
-
-    def extract_files_direct(
-        self, file_paths: List[str]
-    ) -> List[Tuple[str, bytes, Optional[str]]]:
-        """Extract multiple files with native reader (thread-local handles)."""
-        results: list[tuple[str, bytes, str | None]] = []
-
-        # Try native reader first (faster with thread-local handles!)
-        if NATIVE_READER_AVAILABLE:
-            try:
-                reader = NativeSGAReader(self.sga_path)
-                for file_path in file_paths:
-                    try:
-                        data = reader.read_file(file_path)
-                        results.append((file_path, data, None))
-                    except Exception as e:
-                        results.append((file_path, b"", str(e)))
-                reader.close()
-                return results
-            except Exception as e:
-                pass  # Fall back to fs if native reader fails
-        # Fallback to fs if native reader fails
-        with open_fs(self.sga_path, default_protocol="sga") as sga:
-            for file_path in file_paths:
-                try:
-                    with sga.open(file_path, "rb") as f:
-                        data = f.read()
-                    results.append((file_path, data, None))
-                except Exception as e:
-                    results.append((file_path, b"", str(e)))
-
-        return results
-
-    def extract_file_at_offset(
-        self,
-        offset: int,
-        compressed_size: int,
-        decompressed_size: int,
-        storage_type: int,
-    ) -> bytes:
-        """Extract file data directly from byte offset (MAXIMUM SPEED!)."""
-        with open(self.sga_path, "rb") as f:
-            f.seek(offset)
-            data = f.read(compressed_size)
-
-            # Decompress if needed
-            if storage_type in (1, 2):  # STREAM_COMPRESS or BUFFER_COMPRESS
-                data = zlib.decompress(data)
-
-            return data
+from relic.sga.core.native.definitions import (
+    FileEntry,
+    ExtractionStats,
+    ExtractionPlan,
+    ExtractionPlanCategory,
+)
+from relic.sga.core.native.v2 import NATIVE_READER_AVAILABLE
 
 
 class AdvancedParallelUnpacker:

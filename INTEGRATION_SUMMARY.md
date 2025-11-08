@@ -98,7 +98,7 @@ relic sga unpack archive.sga ./output --isolate
 
 ```python
 # Use the advanced parallel unpacker
-from relic.sga.core.parallel_advanced import AdvancedParallelUnpacker
+from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker
 
 # Standard extraction (still fast)
 unpacker = AdvancedParallelUnpacker(num_workers=4)

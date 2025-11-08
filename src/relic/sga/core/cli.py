@@ -26,7 +26,7 @@ from relic.core.cli import (
     get_dir_type_validator,
     get_path_validator,
 )
-from relic.sga.core.parallel_advanced import AdvancedParallelUnpacker
+from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker
 
 _SUCCESS = 0
 
@@ -198,9 +198,8 @@ class EssenceInfoEncoder(JSONEncoder):
             return dataclasses.asdict(o)  # type: ignore
         try:
             return super().default(o)
-        except (
-            TypeError
-        ):  # Kinda bad; but we don't want to serialize, we want to logger.info; so i think this is an acceptable tradeoff
+        # Kinda bad; but we don't want to serialize, we want to logger.info; so i think this is an acceptable tradeoff
+        except TypeError:
             return str(o)
 
 
