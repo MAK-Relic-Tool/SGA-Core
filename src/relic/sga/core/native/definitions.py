@@ -50,7 +50,7 @@ class ExtractionPlanCategory:
 class ReadResult:
 
     path: str
-    data: bytes| None
+    data: bytes | None
     error: str | None = None
 
 

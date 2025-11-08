@@ -19,15 +19,24 @@ import multiprocessing
 import os
 import threading
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed, Future
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum, IntEnum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Any, Generator, Sequence
+from typing import (
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Any,
+    Generator,
+    Sequence,
+    TypeAlias,
+)
 
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from relic.core.logmsg import BraceMessage
 
 from relic.sga.core.definitions import OSFlags
@@ -38,7 +47,8 @@ from relic.sga.core.native.definitions import (
     ExtractionPlanCategory,
     WriteResult,
     ReadResult,
-    ChecksumResult, BatchResult,
+    ChecksumResult,
+    BatchResult,
 )
 from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
@@ -99,6 +109,9 @@ def _categorize_by_size(
     return categories
 
 
+ProgressCallback: TypeAlias = Callable[[int, int], None]
+
+
 class _ExtractStrategy:
     def __init__(self, config: UnpackerConfig, cache: DirectoryCacher):
         self.stats: ExtractionStats = None  # type: ignore
@@ -108,8 +121,16 @@ class _ExtractStrategy:
         self.logger = config.logger or logging.getLogger(__name__)
         self.enable_adaptive_threading = config.enable_adaptive_threading
         self.enable_batching = config.enable_batching
-        self.enable_delta = config.enable_delta
         self.chunk_size = config.chunk_size
+
+    def extract(
+        self,
+        sga_path: str,
+        output_dir: str,
+        on_progress: Optional[ProgressCallback] = None,
+        **kwargs: Any,
+    ) -> ExtractionStats:
+        raise NotImplementedError()
 
     def _start(self, name: str, sga_path: str) -> None:
         self.logger.info(
@@ -119,7 +140,9 @@ class _ExtractStrategy:
         )
         self.stats = ExtractionStats()
 
-    def _collect(self, sga_path: str, file_filter:Optional[Sequence[str]]=None) -> list[FileEntry]:
+    def _collect(
+        self, sga_path: str, file_filter: Optional[Sequence[str]] = None
+    ) -> list[FileEntry]:
         self.logger.info("Collecting file paths...")
         entries = NativeParserV2(sga_path).parse()
 
@@ -145,7 +168,9 @@ class _ExtractStrategy:
 
         self.logger.info(f"Created {len(unique_dirs)} directories")
 
-    def _create_batches(self, entries: list[FileEntry], workers: int, batch_size: int) -> List[List[FileEntry]]:
+    def _create_batches(
+        self, entries: list[FileEntry], workers: int, batch_size: int
+    ) -> List[List[FileEntry]]:
         self.logger.info(f"Extracting {len(entries)} files...")
         self.logger.info(f"Using {workers} workers with batches of {batch_size}")
 
@@ -227,12 +252,16 @@ class _ExtractStrategy:
         return results
 
     def _execute_batches(
-        self, batches: List[List[FileEntry]], executor:ThreadPoolExecutor, sga_path: str, output_dir: str
+        self,
+        batches: List[List[FileEntry]],
+        executor: ThreadPoolExecutor,
+        sga_path: str,
+        output_dir: str,
     ) -> list[Future[list[BatchResult]]]:
         futures = []
         for batch in batches:
             dst_paths = [entry.path for entry in batch]
-            future:Future[list[BatchResult]] = executor.submit(
+            future: Future[list[BatchResult]] = executor.submit(
                 self._extract_batch_isolated,
                 sga_path,
                 output_dir,
@@ -242,20 +271,24 @@ class _ExtractStrategy:
             futures.append(future)
         return futures
 
-    def _parse_batch_results(self, futures:list[Future[list[BatchResult]]], on_progress:Callable[[int,int],None]|None=None) -> None:
+    def _parse_batch_results(
+        self,
+        futures: list[Future[list[BatchResult]]],
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         total_processed = 0
         for future in as_completed(futures):
             results = future.result()
 
-            for success, path, error in results:
-                if success:
+            for result in results:
+                if result.success:
                     self.stats.extracted_files += 1
                     total_processed += 1
                 else:
                     self.stats.failed_files += 1
                     total_processed += 1
                     if self.stats.failed_files <= 10:  # Only show first 10 errors
-                        self.logger.error(f"Failed: {path}: {error}")
+                        self.logger.error(f"Failed: {result.path}: {result.error}")
 
                 if on_progress and total_processed % 500 == 0:
                     on_progress(total_processed, self.stats.total_files)
@@ -302,9 +335,10 @@ class OptimizedStrategy(_ExtractStrategy):
         self,
         sga_path: str,
         output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-        force_full: bool = False,
+        on_progress: Optional[ProgressCallback] = None,
+        *,
         file_filter: Optional[List[str]] = None,
+        **kwargs: Any,
     ) -> ExtractionStats:
         """Extract with all optimizations enabled.
 
@@ -312,7 +346,6 @@ class OptimizedStrategy(_ExtractStrategy):
             sga_path: Path to SGA archive
             output_dir: Output directory
             on_progress: Optional callback (current, total)
-            force_full: Force full extraction even if delta mode enabled
             file_filter: Optional list of file paths to extract (None = extract all)
 
         Returns:
@@ -519,7 +552,8 @@ class UltraFastStrategy(_ExtractStrategy):
         self,
         sga_path: str,
         output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        **kwargs: Any,
     ) -> ExtractionStats:
         """ULTRA-FAST extraction with parallel decompression.
 
@@ -619,13 +653,14 @@ class UltraFastStrategy(_ExtractStrategy):
         )
         return self.stats
 
-class NativeUltraFastStrategy(_ExtractStrategy):
 
+class NativeUltraFastStrategy(_ExtractStrategy):
     def extract(
         self,
         sga_path: str,
         output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        **kwargs: Any,
     ) -> ExtractionStats:
         """NATIVE ULTRA-FAST extraction - 2-3 seconds target!
 
@@ -647,7 +682,9 @@ class NativeUltraFastStrategy(_ExtractStrategy):
 
         with self._disable_gc():
             with self._timer() as timer:
-                self.logger.info(f"Reading + decompressing {len(files)} files (parallel)...")
+                self.logger.info(
+                    f"Reading + decompressing {len(files)} files (parallel)..."
+                )
                 with SgaReader(sga_path) as reader:
                     results = reader.read_files_parallel(files, num_workers=16)
                 t_read = timer()
@@ -656,7 +693,6 @@ class NativeUltraFastStrategy(_ExtractStrategy):
             with self._timer() as timer:
                 self.logger.info("Writing files to disk (parallel)...")
 
-
                 def write_file(
                     item: ReadResult,
                 ) -> WriteResult:
@@ -664,7 +700,8 @@ class NativeUltraFastStrategy(_ExtractStrategy):
                     err = item.error
                     if err:
                         return WriteResult(item.path, False, err)
-
+                    if item.data is None:
+                        return WriteResult(item.path, False, "Data was None")
                     try:
                         dst_path = Path(output_dir) / path.lstrip("/")
                         fd = os.open(
@@ -681,7 +718,9 @@ class NativeUltraFastStrategy(_ExtractStrategy):
                         return WriteResult(path, False, str(e))
 
                 with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                    write_results: List[WriteResult] = list(executor.map(write_file, results))
+                    write_results: List[WriteResult] = list(
+                        executor.map(write_file, results)
+                    )
 
             t_write = timer()
 
@@ -692,6 +731,9 @@ class NativeUltraFastStrategy(_ExtractStrategy):
                     self.stats.extracted_files += 1
                     # Get size from results
                     for read_result in results:
+                        if read_result.data is None:
+                            break
+
                         if read_result.path == write_result.path:
                             self.stats.extracted_bytes += len(read_result.data)
                             break
@@ -700,7 +742,6 @@ class NativeUltraFastStrategy(_ExtractStrategy):
                     self.logger.error(
                         f"Failed to write {write_result.path}: {write_result.error}"
                     )
-
 
         # Summary
         total_time = t_parse + t_dir + t_read + t_write
@@ -732,19 +773,19 @@ class NativeUltraFastStrategy(_ExtractStrategy):
         return self.stats
 
 
-@dataclass
-class UnpackerConfig(slots=True):
+@dataclass(slots=True)
+class UnpackerConfig:
     num_workers: Optional[int] = None
     logger: Optional[logging.Logger] = None
     enable_adaptive_threading: bool = True
     enable_batching: bool = True
-    enable_delta: bool = False
-    chunk_size: int = (1024 * 1024)
+    # enable_delta: bool = False # moved to it's own Strategy; explictly call extract with delta
+    chunk_size: int = 1024 * 1024
 
 
 class DirectoryCacher:
     # Moved to it's own class to allow strategies to reference the same
-    def __init__(self):
+    def __init__(self) -> None:
         # Thread-safe directory cache to avoid redundant mkdir calls
         self._dir_cache: Set[str] = set()
         self._dir_cache_lock = threading.Lock()
@@ -769,91 +810,92 @@ class DirectoryCacher:
                 self._dir_cache.add(dir_str)
 
 
-class ExtractType(IntEnum):
-    Optimized = 0
-    Streaming = 1
-    UltraFast = 2
-    Native = 3
-
-
-class AdvancedParallelUnpacker:
-    """Advanced parallel unpacker with comprehensive optimizations."""
-
-    # Batching thresholds
-    TINY_FILE_BATCH_SIZE = 100
-    SMALL_FILE_BATCH_SIZE = 50
-
+class ProgressiveStrategy(_ExtractStrategy):
     def __init__(
         self,
-        config:UnpackerConfig
+        config: UnpackerConfig,
+        cache: DirectoryCacher,
+        optimized: OptimizedStrategy | None = None,
     ):
-        """Initialize advanced parallel unpacker.
+        super().__init__(config, cache)
+        # We create it using the same config/cache, so it should be the same even if optimized is not given
+        self._optimized = optimized or OptimizedStrategy(config, cache)
+
+    def extract(
+        self,
+        sga_path: str,
+        output_dir: str,
+        on_progress: Optional[ProgressCallback] = None,
+        on_file_extracted: Callable[[str, bytes], None] | None = None,
+        **kwargs: Any,
+    ) -> ExtractionStats:
+        """Extract with callback on each file completion.
+
+        Useful for streaming/pipeline scenarios where you want to start
+        processing files before full extraction completes.
 
         Args:
-            num_workers: Number of worker threads (None = system thread count)
-            logger: Logger instance
-            enable_adaptive_threading: Adjust workers by file size
-            enable_batching: Batch tiny files together
-            enable_delta: Enable delta extraction (default: False)
-            chunk_size: Read chunk size in bytes
+            sga_path: Path to SGA archive
+            output_dir: Output directory
+            on_file_extracted: Callback(file_path, file_data) called when file ready
+            on_progress: Optional progress callback
+
+        Returns:
+            Extraction statistics
         """
-        self._config = config
-        self._cache = DirectoryCacher()
-        self._optimized = OptimizedStrategy(self._config, self._cache)
-        self._streaming = StreamingStrategy(self._config, self._cache)
-        self._ultrafast = UltraFastStrategy(self._config, self._cache)
-        self._ultrafast_native = NativeUltraFastStrategy(self._config, self._cache)
-        self._strategies = {
-            ExtractType.Optimized:self._optimized,
-            ExtractType.Streaming:self._streaming,
-            ExtractType.UltraFast:self._ultrafast,
-            ExtractType.Native:self._ultrafast_native,
-        }
+        from queue import Queue
+        from threading import Thread
 
+        self.logger.info("Progressive extraction mode enabled")
+        if on_file_extracted is None:
+            raise NotImplementedError()  # TODO better error
+        # Queue for extracted files
+        result_queue: Queue[tuple[str, bytes] | None] = Queue()
 
-    def extract(self,sga_path,output_dir,on_progress, extract:ExtractType = ExtractType.Native):
-        extractor = self._strategies.get(extract, self._ultrafast_native)
-        stats = extractor.extract(sga_path,output_dir,on_progress)
+        # Consumer thread to call callbacks
+        def consumer() -> None:
+            while True:
+                item = result_queue.get()
+                if item is None:  # Sentinel to stop
+                    break
+
+                file_path, file_data = item
+                try:
+                    on_file_extracted(file_path, file_data)
+                except Exception as e:
+                    self.logger.error(f"Callback error for {file_path}: {e}")
+
+                result_queue.task_done()
+
+        # Start consumer
+        consumer_thread = Thread(target=consumer, daemon=True)
+        consumer_thread.start()
+
+        # Extract (using modified extraction that queues results)
+        # For simplicity, just use standard extraction
+        # In production, would integrate queue into extract_optimized
+        stats = self._optimized.extract(sga_path, output_dir, on_progress)
+
+        # Wait for all callbacks to complete
+        result_queue.join()
+
+        # Stop consumer
+        result_queue.put(None)
+        consumer_thread.join()
+
         return stats
 
 
-
-
-    def _get_optimal_workers(self, category: str, file_count: int) -> int:
-        """Calculate optimal worker count for file category.
-
-        Args:
-            category: File size category
-            file_count: Number of files in category
-
-        Returns:
-            Optimal number of workers
-        """
-        if not self._config.enable_adaptive_threading:
-            return self.num_workers
-
-        # Tiny files: More workers (low CPU per file)
-        if category == "tiny":
-            return min(self.num_workers * 2, file_count)
-
-        # Small files: Standard workers
-        elif category == "small":
-            return self.num_workers
-
-        # Medium files: Standard workers
-        elif category == "medium":
-            return self.num_workers
-
-        # Large files: Fewer workers (high memory per file)
-        elif category == "large":
-            return max(2, self.num_workers // 2)
-
-        # Huge files: Minimal workers (very high memory)
-        elif category == "huge":
-            return max(1, self.num_workers // 4)
-
-        return self.num_workers
-
+class DeltaStrategy(_ExtractStrategy):
+    def __init__(
+        self,
+        config: UnpackerConfig,
+        cache: DirectoryCacher,
+        optimized: OptimizedStrategy | None = None,
+    ):
+        super().__init__(config, cache)
+        # We create it using the same config/cache, so it should be the same even if optimized is not given
+        self._optimized = optimized or OptimizedStrategy(config, cache)
 
     def _calculate_checksum(self, entry: FileEntry, reader: SgaReader) -> str:
         """Calculate MD5 checksum for a file.
@@ -907,9 +949,9 @@ class AdvancedParallelUnpacker:
         file_entries = NativeParserV2(sga_path).parse()
 
         self.logger.info(f"Calculating checksums for {len(file_entries)} files...")
-
+        num_workers = self.num_workers or 0
         # Calculate checksums in parallel
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {
                 executor.submit(
                     self._calculate_checksum_isolated, sga_path, file_path
@@ -974,11 +1016,12 @@ class AdvancedParallelUnpacker:
         except Exception as e:
             self.logger.warning(f"Could not save manifest: {e}")
 
-    def extract_delta(
+    def extract(
         self,
         sga_path: str,
         output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        **kwargs: Any,
     ) -> ExtractionStats:
         """Extract only files that changed since last extraction.
 
@@ -998,8 +1041,10 @@ class AdvancedParallelUnpacker:
         if previous_manifest is None:
             self.logger.info("No previous manifest found - performing full extraction")
             # Force full extraction (avoid recursion)
-            stats = self.extract_optimized(
-                sga_path, output_dir, on_progress, force_full=True
+            stats = self._optimized.extract(
+                sga_path,
+                output_dir,
+                on_progress,
             )
             # Save manifest for next time
             current_manifest = self._build_manifest(sga_path)
@@ -1047,11 +1092,10 @@ class AdvancedParallelUnpacker:
             f"Skipping {len(previous_manifest) - len(changed_files)} unchanged files"
         )
 
-        stats = self.extract_optimized(
+        stats = self._optimized.extract(
             sga_path,
             output_dir,
             on_progress,
-            force_full=True,
             file_filter=changed_files,  # Only extract changed files!
         )
 
@@ -1063,67 +1107,90 @@ class AdvancedParallelUnpacker:
 
         return stats
 
-    def extract_progressive(
+
+class ExtractionMethod(IntEnum):
+    Optimized = 0
+    Streaming = 1
+    UltraFast = 2
+    Native = 3
+    Delta = 4
+
+
+class AdvancedParallelUnpacker:
+    """Advanced parallel unpacker with comprehensive optimizations."""
+
+    def __init__(self, config: UnpackerConfig):
+        """Initialize advanced parallel unpacker.
+
+        Args:
+            num_workers: Number of worker threads (None = system thread count)
+            logger: Logger instance
+            enable_adaptive_threading: Adjust workers by file size
+            enable_batching: Batch tiny files together
+            enable_delta: Enable delta extraction (default: False)
+            chunk_size: Read chunk size in bytes
+        """
+        self._config = config
+        self._cache = DirectoryCacher()
+        self._optimized = OptimizedStrategy(self._config, self._cache)
+        self._streaming = StreamingStrategy(self._config, self._cache)
+        self._ultrafast = UltraFastStrategy(self._config, self._cache)
+        self._ultrafast_native = NativeUltraFastStrategy(self._config, self._cache)
+        self._delta = DeltaStrategy(self._config, self._cache, self._optimized)
+        self._strategies = {
+            ExtractionMethod.Optimized: self._optimized,
+            ExtractionMethod.Streaming: self._streaming,
+            ExtractionMethod.UltraFast: self._ultrafast,
+            ExtractionMethod.Native: self._ultrafast_native,
+            ExtractionMethod.Delta: self._delta,
+        }
+
+    def extract(
         self,
         sga_path: str,
         output_dir: str,
-        on_file_extracted: Callable[[str, bytes], None],
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Callable[[int, int], None],
+        method: ExtractionMethod = ExtractionMethod.Native,
     ) -> ExtractionStats:
-        """Extract with callback on each file completion.
+        extractor = self._strategies.get(method, self._ultrafast_native)
+        stats = extractor.extract(sga_path, output_dir, on_progress)
+        return stats
 
-        Useful for streaming/pipeline scenarios where you want to start
-        processing files before full extraction completes.
+    def _get_optimal_workers(self, category: str, file_count: int) -> int:
+        """Calculate optimal worker count for file category.
 
         Args:
-            sga_path: Path to SGA archive
-            output_dir: Output directory
-            on_file_extracted: Callback(file_path, file_data) called when file ready
-            on_progress: Optional progress callback
+            category: File size category
+            file_count: Number of files in category
 
         Returns:
-            Extraction statistics
+            Optimal number of workers
         """
-        from queue import Queue
-        from threading import Thread
+        num_workers = self._config.num_workers or 0
+        if not self._config.enable_adaptive_threading:
+            return num_workers
 
-        self.logger.info("Progressive extraction mode enabled")
+        # Tiny files: More workers (low CPU per file)
+        if category == "tiny":
+            return min(num_workers * 2, file_count)
 
-        # Queue for extracted files
-        result_queue: Queue[tuple[str, bytes] | None] = Queue()
+        # Small files: Standard workers
+        elif category == "small":
+            return num_workers
 
-        # Consumer thread to call callbacks
-        def consumer() -> None:
-            while True:
-                item = result_queue.get()
-                if item is None:  # Sentinel to stop
-                    break
+        # Medium files: Standard workers
+        elif category == "medium":
+            return num_workers
 
-                file_path, file_data = item
-                try:
-                    on_file_extracted(file_path, file_data)
-                except Exception as e:
-                    self.logger.error(f"Callback error for {file_path}: {e}")
+        # Large files: Fewer workers (high memory per file)
+        elif category == "large":
+            return max(2, num_workers // 2)
 
-                result_queue.task_done()
+        # Huge files: Minimal workers (very high memory)
+        elif category == "huge":
+            return max(1, num_workers // 4)
 
-        # Start consumer
-        consumer_thread = Thread(target=consumer, daemon=True)
-        consumer_thread.start()
-
-        # Extract (using modified extraction that queues results)
-        # For simplicity, just use standard extraction
-        # In production, would integrate queue into extract_optimized
-        stats = self.extract_optimized(sga_path, output_dir, on_progress)
-
-        # Wait for all callbacks to complete
-        result_queue.join()
-
-        # Stop consumer
-        result_queue.put(None)
-        consumer_thread.join()
-
-        return stats
+        return num_workers
 
     def get_extraction_plan(self, sga_path: str) -> ExtractionPlan:
         """Analyze archive and return extraction plan.
@@ -1138,7 +1205,7 @@ class AdvancedParallelUnpacker:
         """
         entries = NativeParserV2(sga_path).parse()
 
-        categories = _categorize_by_size(entries, logger=self._config.logger)
+        categories = _categorize_by_size(entries, logger=self._config.logger)  # type: ignore
         num_workers = self._config.num_workers or 0
         plan = ExtractionPlan(
             total_files=len(entries),
