@@ -198,9 +198,9 @@ class NativeParserV2:
             major, minor = struct.unpack("<HH", f.read(4))
             version = Version(major, minor)
             self._log(f"SGA Version: {major}.{minor}")
-            VERSION = Version(2,0)
+            VERSION = Version(2, 0)
             if version != VERSION:
-                raise VersionNotSupportedError(version,[VERSION])
+                raise VersionNotSupportedError(version, [VERSION])
 
             # Read header (SGA V2 header is 180 bytes total, TOC starts at 180)
             # The actual offsets are 12 bytes later than documented:

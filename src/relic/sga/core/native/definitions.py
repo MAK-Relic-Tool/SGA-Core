@@ -50,7 +50,15 @@ class ExtractionPlanCategory:
 class ReadResult:
 
     path: str
-    data: bytes
+    data: bytes| None
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class BatchResult:
+
+    success: bool
+    path: str
     error: str | None = None
 
 
