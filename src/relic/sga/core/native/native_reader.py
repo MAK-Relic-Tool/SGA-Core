@@ -18,10 +18,20 @@ from typing import Any, List, Tuple
 from relic.core.errors import MismatchError
 
 from relic.sga.core.definitions import OSFlags, StorageType
-from relic.sga.core.native.definitions import FileEntry
+from relic.sga.core.native.definitions import FileEntry, ReadResult
 
 
 class SgaReader:
+    """
+    Reads an SGA file using FileEntry objects.
+
+    FileEntry objects contain ABSOLUTE byte offsets within the SGA file
+    as well as the file's size (compressed_size)
+    and the file's storage_type
+
+    These three keys allow us to quickly read raw sga files and decompress them if needed
+    """
+
     def __init__(self,sga_path:str):
         self._sga_path = sga_path
         self._mmap_handle:mmap.mmap = None # type: ignore
@@ -46,15 +56,15 @@ class SgaReader:
 
     def read_files_parallel(
         self, file_paths: List[FileEntry], num_workers: int = 16
-    ) -> List[Tuple[str, bytes, str | None]]:
+    ) -> List[ReadResult]:
         """Read and decompress files in PARALLEL."""
 
-        def read_decompress(entry: FileEntry) -> Tuple[str, bytes, str | None]:
+        def read_decompress(entry: FileEntry) -> ReadResult:
             try:
                 data = self.read_buffer(entry)
-                return (entry.path, data, None)
+                return ReadResult(entry.path, data, None)
             except Exception as e:
-                return (entry.path, b"", str(e))
+                return ReadResult(entry.path, b"", str(e))
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             results = list(executor.map(read_decompress, file_paths))
@@ -62,7 +72,7 @@ class SgaReader:
         return results
 
 
-    def _open_mmap(self) -> None:
+    def open(self) -> None:
         """Open memory-mapped access."""
         if self._mmap_handle is None:
             self._file_handle = os.open(
@@ -72,7 +82,7 @@ class SgaReader:
         if self._mmap_handle is None:
             raise Exception("failed to init mmap")
 
-    def _close_mmap(self) -> None:
+    def close(self) -> None:
         """Close memory-mapped access."""
         if self._mmap_handle:
             self._mmap_handle.close()
@@ -82,8 +92,8 @@ class SgaReader:
             self._file_handle = None # type: ignore
 
     def __enter__(self) -> SgaReader:
-        self._open_mmap()
+        self.open()
         return self
 
     def __exit__(self, exc_type:Any, exc_val:Any, exc_tb:Any) -> None:
-        self._close_mmap()
+        self.close()

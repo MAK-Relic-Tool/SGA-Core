@@ -29,7 +29,7 @@ from relic.sga.core.native.definitions import (
     FileEntry,
     ExtractionStats,
     ExtractionPlan,
-    ExtractionPlanCategory,
+    ExtractionPlanCategory, WriteResult, ReadResult, ChecksumResult,
 )
 from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
@@ -303,8 +303,7 @@ class AdvancedParallelUnpacker:
 
         # FAST MODE: Skip metadata collection, just get file paths!
         self.logger.info("Collecting file paths...")
-        with NativeParserV2(sga_path) as sga:
-            entries = list(sga._files.values())
+        entries = NativeParserV2(sga_path).parse()
 
         # Apply filter if provided (DELTA MODE!)
         if file_filter is not None:
@@ -417,8 +416,7 @@ class AdvancedParallelUnpacker:
         # Get file list
         t0 = time_module.perf_counter()
         self.logger.info("Collecting file paths...")
-        with NativeParserV2(sga_path) as sga:
-            files = list(sga._files.values())
+        files = NativeParserV2(sga_path).parse()
         timings["file_listing"] = time_module.perf_counter() - t0
 
         self.stats.total_files = len(files)
@@ -543,201 +541,8 @@ class AdvancedParallelUnpacker:
 
         return self.stats
 
-    def extract_streaming_native(
-        self,
-        sga_path: str,
-        output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-    ) -> ExtractionStats:
-        """PHASE 2: Multi-reader streaming with thread-local SGA handles.
 
-        Architecture:
-        - MULTIPLE READERS: Each with thread-local SGA handle (no lock contention!)
-        - Uses NativeSGAReader for thread-safe parallel reading
-        - Massive memory buffer for smooth flow
-        - All optimizations from Phase 1
-
-        Expected: 2-3x faster than single-reader streaming!
-        """
-        self.logger.info(f"Starting NATIVE MULTI-READER extraction: {sga_path}")
-        self.stats = ExtractionStats()
-
-        # Get file list using native reader
-        self.logger.info("Collecting file paths...")
-        native_reader = NativeParserV2(sga_path)
-        file_paths = native_reader.list_files()
-        native_reader.close()
-
-        self.stats.total_files = len(file_paths)
-        self.logger.info(f"Found {len(file_paths)} files")
-
-        # PRE-CREATE ALL DIRECTORIES
-        self.logger.info("Pre-creating directory structure...")
-        unique_dirs = set()
-        for file_path in file_paths:
-            dst_path = Path(output_dir) / file_path.lstrip("/")
-            unique_dirs.add(dst_path.parent)
-
-        for dir_path in unique_dirs:
-            dir_path.mkdir(parents=True, exist_ok=True)
-
-        self.logger.info(f"Created {len(unique_dirs)} directories")
-
-        # DISABLE GC
-        gc_was_enabled = gc.isenabled()
-        gc.disable()
-        self.logger.info("Disabled GC for maximum speed")
-
-        # MULTI-READER with thread-local handles!
-        num_readers = min(5, max(2, self.num_workers // 3))  # 5 readers for 15 workers
-        num_writers = self.num_workers - num_readers
-
-        self.logger.info(
-            f"Using {num_readers} readers (thread-local) + {num_writers} writers"
-        )
-
-        # Split files among readers
-        files_per_reader = len(file_paths) // num_readers
-        reader_file_lists = []
-        for i in range(num_readers):
-            start = i * files_per_reader
-            end = start + files_per_reader if i < num_readers - 1 else len(file_paths)
-            reader_file_lists.append(file_paths[start:end])
-
-        # Shared deque with massive buffer
-        buffer_size = min(len(file_paths), 10000)
-        file_deque: deque[tuple[str, bytes | None, None | str]] = deque(
-            maxlen=buffer_size
-        )
-        self.logger.info(
-            f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
-        )
-
-        deque_lock = threading.Lock()
-        deque_not_empty = threading.Condition(deque_lock)
-        readers_done = threading.Event()
-        active_readers = [num_readers]
-        total_processed = [0]
-        processing_lock = threading.Lock()
-
-        def reader_thread(file_list: list[FileEntry], reader_id: int) -> None:
-            """Thread-local SGA handle reader."""
-            try:
-                # Each reader creates its own NativeSGAReader with thread-local handle
-                with SgaReader(sga_path) as reader:
-                    for file in file_list:
-                        try:
-                            data = reader.read_buffer(file)
-
-                            with deque_not_empty:
-                                while len(file_deque) >= buffer_size:
-                                    deque_not_empty.wait(0.001)
-                                file_deque.append((file.path, data, None))
-                                deque_not_empty.notify()
-                        except Exception as e:
-                            with deque_not_empty:
-                                while len(file_deque) >= buffer_size:
-                                    deque_not_empty.wait(0.001)
-                                file_deque.append((file.path, None, str(e)))
-                                deque_not_empty.notify()
-            finally:
-                with processing_lock:
-                    active_readers[0] -= 1
-                    if active_readers[0] == 0:
-                        readers_done.set()
-
-        def writer_thread() -> None:
-            """Parallel writers."""
-            while not readers_done.is_set() or file_deque:
-                with deque_not_empty:
-                    while not file_deque and not readers_done.is_set():
-                        deque_not_empty.wait(0.01)
-
-                    if not file_deque:
-                        break
-
-                    item = file_deque.popleft()
-                    deque_not_empty.notify()
-
-                file_path, data, error = item
-
-                if error:
-                    with processing_lock:
-                        self.stats.failed_files += 1
-                        total_processed[0] += 1
-                        if self.stats.failed_files <= 10:
-                            self.logger.error(f"Failed to read {file_path}: {error}")
-                    continue
-
-                try:
-                    dst_path = Path(output_dir) / file_path.lstrip("/")
-
-                    fd = os.open(
-                        dst_path, OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY
-                    )
-                    os.write(fd, data)  # type: ignore
-                    os.close(fd)
-
-                    with processing_lock:
-                        self.stats.extracted_files += 1
-                        self.stats.extracted_bytes += len(data)  # type: ignore
-                        total_processed[0] += 1
-
-                        if on_progress and total_processed[0] % 500 == 0:
-                            on_progress(total_processed[0], self.stats.total_files)
-
-                except Exception as e:
-                    with processing_lock:
-                        self.stats.failed_files += 1
-                        total_processed[0] += 1
-                        if self.stats.failed_files <= 10:
-                            self.logger.error(f"Failed to write {file_path}: {e}")
-
-        # Start readers
-        readers = []
-        for i in range(num_readers):
-            r = threading.Thread(
-                target=reader_thread, args=(reader_file_lists[i], i), daemon=True
-            )
-            r.start()
-            readers.append(r)
-
-        # Start writers
-        writers = []
-        for _ in range(num_writers):
-            w = threading.Thread(target=writer_thread, daemon=True)
-            w.start()
-            writers.append(w)
-
-        # Wait for completion
-        for r in readers:
-            r.join()
-        for w in writers:
-            w.join()
-
-        # Final progress
-        if on_progress:
-            on_progress(total_processed[0], self.stats.total_files)
-
-        # RE-ENABLE GC
-        if gc_was_enabled:
-            gc.enable()
-            self.logger.info("Re-enabled GC")
-
-        gc.collect()
-
-        # Summary
-        self.logger.info("Extraction complete!")
-        self.logger.info(f"  Total:      {self.stats.total_files}")
-        self.logger.info(f"  Successful: {self.stats.extracted_files}")
-        self.logger.info(f"  Failed:     {self.stats.failed_files}")
-        self.logger.info(
-            f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
-        )
-
-        return self.stats
-
-    def extract_native_ultra_fast(
+    def extract(
         self,
         sga_path: str,
         output_dir: str,
@@ -760,8 +565,7 @@ class AdvancedParallelUnpacker:
         # Parse SGA
         t0 = time_module.perf_counter()
         self.logger.info("Parsing SGA binary format...")
-        reader = NativeParserV2(sga_path, verbose=True)
-        files = list(reader._files.values())
+        files = NativeParserV2(sga_path).parse()
         t_parse = time_module.perf_counter() - t0
 
         self.stats.total_files = len(files)
@@ -799,11 +603,12 @@ class AdvancedParallelUnpacker:
         self.logger.info("Writing files to disk (parallel)...")
 
         def write_file(
-            item: tuple[str, bytes, str | None],
-        ) -> tuple[str, bool, str | None]:
-            path, data, err = item
+            item: ReadResult,
+        ) -> WriteResult:
+            path = item.path
+            err = item.error
             if err:
-                return (path, False, err)
+                return WriteResult(item.path, False, err)
 
             try:
                 dst_path = Path(output_dir) / path.lstrip("/")
@@ -814,29 +619,30 @@ class AdvancedParallelUnpacker:
                     | OSFlags.O_BINARY
                     | OSFlags.O_TRUNC,
                 )
-                os.write(fd, data)
+                os.write(fd, item.data)
                 os.close(fd)
-                return (path, True, None)
+                return WriteResult(path, True, None)
             except Exception as e:
-                return (path, False, str(e))
+                return WriteResult(path, False, str(e))
 
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            write_results = list(executor.map(write_file, results))
+            write_results:List[WriteResult] = list(executor.map(write_file, results))
 
         t_write = time_module.perf_counter() - t0
 
         # Count results
-        for path, success, err in write_results:
-            if success:
+        for write_result in write_results:
+
+            if write_result.success:
                 self.stats.extracted_files += 1
                 # Get size from results
-                for p, data, _ in results:
-                    if p == path:
-                        self.stats.extracted_bytes += len(data)
+                for read_result in results:
+                    if read_result.path == write_result.path:
+                        self.stats.extracted_bytes += len(read_result.data)
                         break
             else:
                 self.stats.failed_files += 1
-                self.logger.error(f"Failed to write {path}: {err}")
+                self.logger.error(f"Failed to write {write_result.path}: {write_result.error}")
 
         # Re-enable GC
         if gc_was_enabled:
@@ -892,7 +698,7 @@ class AdvancedParallelUnpacker:
 
     def _calculate_checksum_isolated(
         self, sga_path: str, entry: FileEntry
-    ) -> Tuple[str, Optional[str], Optional[str]]:
+    ) -> ChecksumResult:
         """Calculate checksum with isolated SGA handle.
 
         Args:
@@ -905,9 +711,9 @@ class AdvancedParallelUnpacker:
         try:
             with SgaReader(sga_path) as sga:
                 checksum = self._calculate_checksum(entry, sga)
-                return (entry.path, checksum, None)
+                return ChecksumResult(entry.path, checksum, None)
         except Exception as e:
-            return (entry.path, None, str(e))
+            return ChecksumResult(entry.path, None, str(e))
 
     def _build_manifest(self, sga_path: str) -> Dict[str, str]:
         """Build manifest of file checksums using parallel processing.
@@ -921,8 +727,7 @@ class AdvancedParallelUnpacker:
         manifest = {}
 
         # Collect all file paths first
-        with NativeParserV2(sga_path) as sga:
-            file_entries = list(sga._files.values())
+        file_entries = NativeParserV2(sga_path).parse()
 
         self.logger.info(f"Calculating checksums for {len(file_entries)} files...")
 
@@ -937,12 +742,12 @@ class AdvancedParallelUnpacker:
 
             processed = 0
             for future in as_completed(futures):
-                file_path, checksum, error = future.result()
+                result:ChecksumResult = future.result()
 
-                if checksum:
-                    manifest[file_path] = checksum
+                if result.checksum:
+                    manifest[result.path] = result.checksum
                 else:
-                    self.logger.warning(f"Could not checksum {file_path}: {error}")
+                    self.logger.warning(f"Could not checksum {result.path}: {result.error}")
 
                 processed += 1
                 if processed % 1000 == 0:
@@ -1153,8 +958,7 @@ class AdvancedParallelUnpacker:
         Returns:
             Dictionary with extraction plan details
         """
-        native_sga = NativeParserV2(sga_path)
-        entries = list(native_sga._files.values())
+        entries = NativeParserV2(sga_path).parse()
 
         categories = _categorize_by_size(entries,logger=self.logger)
 

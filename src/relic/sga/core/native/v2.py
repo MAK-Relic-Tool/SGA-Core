@@ -34,12 +34,10 @@ class NativeParserV2:
         self.sga_path = sga_path
         self.verbose = verbose
         self._files: Dict[str, FileEntry] = {}
-        self._mmap_handle: Optional[mmap.mmap] = None
-        self._file_handle: Optional[int] = None
         self._data_block_start = 0
 
         # Parse the binary format
-        self._parse_sga_binary()
+        self._parsed = False
 
     def _log(self, msg: str) -> None:
         """Log if verbose."""
@@ -284,91 +282,17 @@ class NativeParserV2:
             self._build_file_paths(
                 folders, files, subfolder_idx, drive_name, full_folder_path
             )
+        self._parsed = True
 
-    def open_mmap(self) -> None:
-        """Open memory-mapped access."""
-        if self._mmap_handle is None:
-            self._file_handle = os.open(
-                self.sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
-            )
-            self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
+    def parse(self) -> list[FileEntry]:
+        if not self._parsed:
+            self._parse_sga_binary()
 
-    def close_mmap(self) -> None:
-        """Close memory-mapped access."""
-        if self._mmap_handle:
-            self._mmap_handle.close()
-            self._mmap_handle = None
-        if self._file_handle is not None:
-            os.close(self._file_handle)
-            self._file_handle = None
-    #
-    # def read_file(self, file_path: str) -> bytes:
-    #     """Read file using mmap + decompress.
-    #
-    #     Args:
-    #         file_path: Full path to file
-    #
-    #     Returns:
-    #         Decompressed file data
-    #     """
-    #     # Normalize path (convert backslashes to forward slashes)
-    #     file_path = file_path.replace("\\", "/").strip("/")
-    #
-    #     if file_path not in self._files:
-    #         raise KeyError(f"File not found: {file_path}")
-    #
-    #     entry = self._files[file_path]
-    #
-    #     # Open mmap if needed
-    #     if self._mmap_handle is None:
-    #         self.open_mmap()
-    #
-    #     # Read compressed data from TRUE byte offset!
-    #     compressed_data: bytes = self._mmap_handle[
-    #         entry.data_offset : entry.data_offset + entry.compressed_size
-    #     ]  # type:ignore
-    #
-    #     # Decompress if needed (storage_type: 0=STORE, 1=STREAM_COMPRESS, 2=BUFFER_COMPRESS)
-    #     if entry.storage_type != 0:
-    #         # Use decompressobj() like relic does
-    #         decompressor = zlib.decompressobj()
-    #         data = decompressor.decompress(bytes(compressed_data))
-    #         data += decompressor.flush()
-    #     else:
-    #         data = bytes(compressed_data)
-    #
-    #     return data
-    #
-    # def read_files_parallel(
-    #     self, file_paths: List[str], num_workers: int = 16
-    # ) -> List[Tuple[str, bytes, str | None]]:
-    #     """Read and decompress files in PARALLEL."""
-    #     if self._mmap_handle is None:
-    #         self.open_mmap()
-    #
-    #     def read_decompress(file_path: str) -> Tuple[str, bytes, str | None]:
-    #         try:
-    #             data = self.read_file(file_path)
-    #             return (file_path, data, None)
-    #         except Exception as e:
-    #             return (file_path, b"", str(e))
-    #
-    #     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-    #         results = list(executor.map(read_decompress, file_paths))
-    #
-    #     return results
+        return list(self._files.values())
 
-    def list_files(self) -> List[str]:
-        """Get list of all files."""
-        return list(self._files.keys())
 
-    def __enter__(self) -> NativeParserV2:
-        self.open_mmap()
-        return self
 
-    def close(self) -> None:
-        self.close_mmap()
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
-        self.close_mmap()
-        return False
+
+
+

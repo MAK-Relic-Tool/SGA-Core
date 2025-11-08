@@ -29,6 +29,7 @@ from relic.core.cli import (
 from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker
 
 _SUCCESS = 0
+_FAIL = 1
 
 # Backwards compatibility aliases for v2 package
 _get_file_type_validator = get_file_type_validator
@@ -56,7 +57,10 @@ class RelicSgaUnpackCli(CliPlugin):
         desc = """Unpack an SGA archive to the filesystem.
             If only one root is present in the SGA, '--merge' is implied.
             If multiple roots are in the SGA '--isolate' is implied.
-            Manually specify the flags to override this behaviour."""
+            Manually specify the flags to override this behaviour.
+            """
+
+
         if command_group is None:
             parser = RelicArgParser("unpack", description=desc)
         else:
@@ -88,17 +92,16 @@ class RelicSgaUnpackCli(CliPlugin):
         )
 
         # Performance options
-        parser.add_argument(
-            "--fast",
-            help="Use Fast native extraction (default, 80x faster)",
+        sga_legacy_flags = parser.add_mutually_exclusive_group()
+        sga_legacy_flags.add_argument(
+            "--legacy",
+            help="Use fs-based extraction (slower, does not support workers).",
             action="store_true",
-            default=True,
         )
-        parser.add_argument(
-            "--compatible",
-            help="Use compatible fs-based extraction (slower, more compatible)",
+        sga_legacy_flags.add_argument(
+            "--nolegacy",
+            help="Do not fallback to legacy extraction",
             action="store_true",
-            default=False,
         )
         parser.add_argument(
             "--workers",
@@ -109,12 +112,14 @@ class RelicSgaUnpackCli(CliPlugin):
 
         return parser
 
+
     def command(self, ns: Namespace, *, logger: Logger) -> Optional[int]:
         infile: str = ns.src_sga
         outdir: str = ns.out_dir
         merge: bool = ns.merge
         isolate: bool = ns.isolate
-        use_fast: bool = not ns.compatible  # Use fast unless --compatible specified
+        use_legacy: bool = ns.legacy
+        should_fallback = not ns.nolegacy
         num_workers: Optional[int] = ns.workers
 
         if merge and isolate:  # pragma: nocover
@@ -122,11 +127,18 @@ class RelicSgaUnpackCli(CliPlugin):
             raise relic.core.cli.RelicArgParserError(
                 "Isolate and Merge flags are mutually exclusive"
             )
+        if use_legacy and should_fallback:# pragma: nocover
+            # This error should be impossible
+            raise relic.core.cli.RelicArgParserError(
+                "Legacy and NoLegacy flags are mutually exclusive"
+            )
+
+
 
         logger.info(f"Unpacking `{infile}`")
 
         # Use Fast native extraction by default
-        if use_fast:
+        if not use_legacy:
             try:
                 import multiprocessing
 
@@ -145,7 +157,7 @@ class RelicSgaUnpackCli(CliPlugin):
                             f"  Progress: {current}/{total} files ({current*100//total}%)"
                         )
 
-                stats = unpacker.extract_native_ultra_fast(
+                stats = unpacker.extract(
                     infile, outdir, on_progress=_progress
                 )
 
@@ -154,17 +166,20 @@ class RelicSgaUnpackCli(CliPlugin):
                 )
                 if stats.failed_files > 0:
                     logger.warning(f"Failed: {stats.failed_files} files")
-                    return 1
+                    return _FAIL
 
                 return _SUCCESS
 
             except Exception as e:
                 logger.warning(f"Fast extraction failed: {e}")
-                logger.info("Falling back to compatible mode...")
-                use_fast = False
+                if use_legacy:
+                    logger.info("Falling back to compatible mode...")
+                else:
+                    return _FAIL
+                use_legacy = should_fallback
 
         # Fallback to compatible fs-based extraction
-        if not use_fast:
+        if use_legacy:
             logger.info("Using compatible fs-based extraction")
 
             def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:

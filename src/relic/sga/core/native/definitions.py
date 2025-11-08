@@ -44,3 +44,23 @@ class ExtractionPlanCategory:
     file_count: int
     total_bytes: int
     workers: int
+
+@dataclass(slots=True)
+class ReadResult:
+
+    path: str
+    data: bytes
+    error: str|None = None
+
+@dataclass(slots=True)
+class WriteResult:
+
+    path: str
+    success: bool
+    error: str|None = None
+
+@dataclass(slots=True)
+class ChecksumResult:
+    path: str
+    checksum: str|None
+    error: str|None = None
