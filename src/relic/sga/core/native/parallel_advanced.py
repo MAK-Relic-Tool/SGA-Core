@@ -992,7 +992,3 @@ class AdvancedParallelUnpacker:
         plan.estimated_time_seconds = plan.total_bytes / effective_throughput
 
         return plan
-
-if __name__ == "__main__":
-    from relic.core import CLI
-    CLI.run_with("relic", "sga", "unpack", r"A:\Steam\Launcher\steamapps\common\Dawn of War Definitive Edition\W40k\W40kData-SharedTextures-Definitive.sga", r"A:\Steam\Launcher\steamapps\common\Dawn of War Definitive Edition\W40k\STDump")
