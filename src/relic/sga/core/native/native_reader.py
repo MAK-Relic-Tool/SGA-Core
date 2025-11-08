@@ -15,7 +15,7 @@ import sys
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Any, Optional, Literal
+from typing import Dict, List, Tuple, Any, Optional, Literal, BinaryIO
 
 from relic.sga.core.definitions import OSFlags
 
@@ -66,6 +66,22 @@ class NativeSGAReader:
         if self.verbose:
             print(f"[Parser] {msg}")  # TODO use logger
 
+
+    def _parse_toc_pair(self, f:BinaryIO):
+        offset = struct.unpack("<I", f.read(4))[0]
+        count = struct.unpack("<H", f.read(2))[0]
+        return offset, count
+
+
+    def _parse_toc(self, f:BinaryIO):
+        (dO, dC) = self._parse_toc_pair(f)
+        (foldO, foldC)  = self._parse_toc_pair(f)
+        (fileO, fileC) = self._parse_toc_pair(f)
+        (nameO, nameC) = self._parse_toc_pair(f)
+        return dO, dC, foldO, foldC, fileO, fileC, nameO, nameC
+
+    def _parse_drives(self, f:BinaryIO):
+
     def _parse_sga_binary(self) -> None:  # TODO; move to v2
         """Parse SGA V2 binary format manually."""
         self._log(f"Opening {self.sga_path}...")
@@ -105,14 +121,7 @@ class NativeSGAReader:
             # Parse TOC Header
             # Format: drive_pos(4), drive_count(2), folder_pos(4), folder_count(2),
             #         file_pos(4), file_count(2), name_pos(4), name_count(2)
-            drive_offset = struct.unpack("<I", f.read(4))[0]
-            drive_count = struct.unpack("<H", f.read(2))[0]
-            folder_offset = struct.unpack("<I", f.read(4))[0]
-            folder_count = struct.unpack("<H", f.read(2))[0]
-            file_offset = struct.unpack("<I", f.read(4))[0]
-            file_count = struct.unpack("<H", f.read(2))[0]
-            name_offset = struct.unpack("<I", f.read(4))[0]
-            name_count = struct.unpack("<I", f.read(4))[0]
+            drive_offset, drive_count, folder_offset, folder_count, file_offset, file_count, name_offset, name_count = self._parse_toc(f)
 
             self._log(
                 f"TOC: {drive_count} drives, {folder_count} folders, {file_count} files, {name_count} strings"
@@ -124,7 +133,16 @@ class NativeSGAReader:
             # Parse string table FIRST (names are stored here!)
             self._log("Parsing string table...")
             f.seek(toc_base + name_offset)
-            string_table_data = f.read(name_count)
+            _non_name_offsets = [drive_offset, folder_offset, file_offset]
+            # well formatted TOC; we can determine the size of the name table using the TOC size (name size is always last)
+            name_buffer_terminal = toc_size
+            if not all(offset < name_offset for offset in _non_name_offsets):
+                # Determine *next* offset to determine the size of the buffer
+                name_buffer_terminal = toc_size
+                for offset in _non_name_offsets:
+                    if name_offset < offset < name_buffer_terminal:
+                        name_buffer_terminal = offset
+            string_table_data = f.read(name_buffer_terminal - name_offset)
 
             def read_string_at_offset(offset: int) -> str:
                 """Read null-terminated string from string table."""

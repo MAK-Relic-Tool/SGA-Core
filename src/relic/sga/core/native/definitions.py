@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
@@ -53,3 +53,14 @@ class ExtractionPlanCategory:
     file_count: int
     total_bytes: int
     workers: int
+
+class NativeSga:
+    """
+    An abstraction that bridges the difference between schemas for native SGA operations
+    """
+
+
+    def _collect_file_metadata(
+        self, base_path: str = "/"
+    ) -> List[FileEntry]:
+        raise NotImplementedError

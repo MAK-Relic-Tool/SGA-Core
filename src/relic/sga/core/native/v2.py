@@ -8,10 +8,11 @@ from fs import open_fs
 
 from relic.sga.core import MAGIC_WORD, Version
 from relic.sga.core.errors import MagicMismatchError
+from relic.sga.core.native.definitions import NativeSga
 
 # Import native SGA reader for Phase 2 optimization
 try:
-    from relic.sga.core.native.native_reader import NativeSGAReader
+    from relic.sga.core.native.native_reader import NativeSGAReader, FileEntry
 
     NATIVE_READER_AVAILABLE = True
 except ImportError:
@@ -106,3 +107,46 @@ class DirectSGAReader:
                 data = zlib.decompress(data)
 
             return data
+
+class NativeSgaV2(NativeSga):
+
+    def _collect_file_metadata(
+        self, base_path: str = "/"
+    ) -> List[FileEntry]:
+        """Collect detailed metadata for all files.
+
+        Args:
+            src_fs: Source filesystem
+            base_path: Base path to start from
+
+        Returns:
+            List of FileEntry objects with metadata
+        """
+        entries = []
+
+        for path in src_fs.walk.files(base_path):
+            try:
+                info = src_fs.getinfo(path, namespaces=["details", "access"])
+
+                # Get size
+                size = info.size
+
+                # Estimate compressed size (actual value from SGA would be better)
+                # For now, use file size as compressed size
+                compressed_size = size
+
+                # Try to determine storage type from info
+                storage_type = "store"  # Default
+
+                entry = FileEntry(
+                    path=path,
+                    size=size,
+                    compressed_size=compressed_size,
+                    storage_type=storage_type,
+                )
+                entries.append(entry)
+
+            except Exception as e:
+                self.logger.warning(f"Could not get metadata for {path}: {e}")
+
+        return entries

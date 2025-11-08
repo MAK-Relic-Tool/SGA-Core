@@ -33,7 +33,7 @@ from relic.sga.core.native.definitions import (
     ExtractionPlan,
     ExtractionPlanCategory,
 )
-from relic.sga.core.native.v2 import NATIVE_READER_AVAILABLE
+from relic.sga.core.native.v2 import NATIVE_READER_AVAILABLE, NativeSgaV2
 
 
 class AdvancedParallelUnpacker:
@@ -99,46 +99,6 @@ class AdvancedParallelUnpacker:
                 dir_path.mkdir(parents=True, exist_ok=True)
                 self._dir_cache.add(dir_str)
 
-    def _collect_file_metadata(
-        self, src_fs: FS, base_path: str = "/"
-    ) -> List[FileEntry]:
-        """Collect detailed metadata for all files.
-
-        Args:
-            src_fs: Source filesystem
-            base_path: Base path to start from
-
-        Returns:
-            List of FileEntry objects with metadata
-        """
-        entries = []
-
-        for path in src_fs.walk.files(base_path):
-            try:
-                info = src_fs.getinfo(path, namespaces=["details", "access"])
-
-                # Get size
-                size = info.size
-
-                # Estimate compressed size (actual value from SGA would be better)
-                # For now, use file size as compressed size
-                compressed_size = size
-
-                # Try to determine storage type from info
-                storage_type = "store"  # Default
-
-                entry = FileEntry(
-                    path=path,
-                    size=size,
-                    compressed_size=compressed_size,
-                    storage_type=storage_type,
-                )
-                entries.append(entry)
-
-            except Exception as e:
-                self.logger.warning(f"Could not get metadata for {path}: {e}")
-
-        return entries
 
     def _categorize_by_size(
         self, entries: List[FileEntry]
@@ -1645,8 +1605,8 @@ class AdvancedParallelUnpacker:
         Returns:
             Dictionary with extraction plan details
         """
-        with open_fs(sga_path, default_protocol="sga") as sga:
-            entries = self._collect_file_metadata(sga)
+        native_sga = NativeSgaV2(sga_path)
+        entries = native_sga._collect_file_metadata()
 
         categories = self._categorize_by_size(entries)
 
