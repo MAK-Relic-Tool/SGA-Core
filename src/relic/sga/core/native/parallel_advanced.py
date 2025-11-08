@@ -23,7 +23,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from contextlib import contextmanager
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, IntEnum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple, Any, Generator, Sequence
 
@@ -770,6 +770,13 @@ class DirectoryCacher:
                 self._dir_cache.add(dir_str)
 
 
+class ExtractType(IntEnum):
+    Optimized = 0
+    Streaming = 1
+    UltraFast = 2
+    Native = 3
+
+
 class AdvancedParallelUnpacker:
     """Advanced parallel unpacker with comprehensive optimizations."""
 
@@ -797,6 +804,18 @@ class AdvancedParallelUnpacker:
         self._streaming = StreamingStrategy(self._config, self._cache)
         self._ultrafast = UltraFastStrategy(self._config, self._cache)
         self._ultrafast_native = NativeUltraFastStrategy(self._config, self._cache)
+        self._strategies = {
+            ExtractType.Optimized:self._optimized,
+            ExtractType.Streaming:self._streaming,
+            ExtractType.UltraFast:self._ultrafast,
+            ExtractType.Native:self._ultrafast_native,
+        }
+
+
+    def extract(self,sga_path,output_dir,on_progress, extract:ExtractType = ExtractType.Native):
+        extractor = self._strategies.get(extract, self._ultrafast_native)
+        stats = extractor.extract(sga_path,output_dir,on_progress)
+        return stats
 
 
 
@@ -811,7 +830,7 @@ class AdvancedParallelUnpacker:
         Returns:
             Optimal number of workers
         """
-        if not self.enable_adaptive_threading:
+        if not self._config.enable_adaptive_threading:
             return self.num_workers
 
         # Tiny files: More workers (low CPU per file)
@@ -836,37 +855,6 @@ class AdvancedParallelUnpacker:
 
         return self.num_workers
 
-    def _batch_tiny_files(self, entries: List[FileEntry]) -> List[List[FileEntry]]:
-        """Batch tiny files together for efficient processing.
-
-        Args:
-            entries: List of tiny file entries
-
-        Returns:
-            List of batches
-        """
-        if not self.enable_batching or len(entries) < self.TINY_FILE_BATCH_SIZE:
-            # Don't batch if disabled or not enough files
-            return [[e] for e in entries]
-
-        batches = []
-        current_batch = []
-
-        for entry in entries:
-            current_batch.append(entry)
-
-            if len(current_batch) >= self.TINY_FILE_BATCH_SIZE:
-                batches.append(current_batch)
-                current_batch = []
-
-        # Add remaining files
-        if current_batch:
-            batches.append(current_batch)
-
-        self.logger.info(
-            f"Batched {len(entries)} tiny files into {len(batches)} batches"
-        )
-        return batches
 
     def _calculate_checksum(self, entry: FileEntry, reader: SgaReader) -> str:
         """Calculate MD5 checksum for a file.
@@ -1158,7 +1146,7 @@ class AdvancedParallelUnpacker:
             total_bytes=sum(e.decompressed_size for e in entries),
             categories={},
             estimated_time_seconds=0,
-            recommended_workers=self.num_workers,
+            recommended_workers=self._config.num_workers,
         )
 
         for cat, files in categories.items():
@@ -1178,7 +1166,7 @@ class AdvancedParallelUnpacker:
         # Assume ~50 MB/s extraction rate per worker
         throughput_per_worker = 50 * 1024 * 1024  # 50 MB/s
         effective_throughput = (
-            throughput_per_worker * self.num_workers * 0.7
+            throughput_per_worker * self._config.num_workers * 0.7
         )  # 70% efficiency
         plan.estimated_time_seconds = plan.total_bytes / effective_throughput
 
