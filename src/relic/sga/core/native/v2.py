@@ -7,11 +7,11 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Tuple, BinaryIO, List, Optional, Any, Literal
 
-from relic.sga.core.definitions import OSFlags
+from relic.sga.core.definitions import OSFlags, StorageType
 from relic.sga.core.native.definitions import FileEntry
 
 
-class NativeReaderV2:
+class NativeParserV2:
     """REAL native SGA reader - parses binary format directly.
 
     This completely bypasses fs library by:
@@ -150,7 +150,8 @@ class NativeReaderV2:
             file_name = string_table[name_off]
 
             # Storage type is in upper nibble of flags
-            storage_type = (flags & 0xF0) >> 4
+            # 1/2 is buffer/stream compression; supposedly they mean different things to the engine; to us, they are the same
+            storage_type = StorageType((flags & 0xF0) >> 4)
 
             files.append(
                 {
@@ -300,68 +301,68 @@ class NativeReaderV2:
         if self._file_handle is not None:
             os.close(self._file_handle)
             self._file_handle = None
-
-    def read_file(self, file_path: str) -> bytes:
-        """Read file using mmap + decompress.
-
-        Args:
-            file_path: Full path to file
-
-        Returns:
-            Decompressed file data
-        """
-        # Normalize path (convert backslashes to forward slashes)
-        file_path = file_path.replace("\\", "/").strip("/")
-
-        if file_path not in self._files:
-            raise KeyError(f"File not found: {file_path}")
-
-        entry = self._files[file_path]
-
-        # Open mmap if needed
-        if self._mmap_handle is None:
-            self.open_mmap()
-
-        # Read compressed data from TRUE byte offset!
-        compressed_data: bytes = self._mmap_handle[
-            entry.data_offset : entry.data_offset + entry.compressed_size
-        ]  # type:ignore
-
-        # Decompress if needed (storage_type: 0=STORE, 1=STREAM_COMPRESS, 2=BUFFER_COMPRESS)
-        if entry.storage_type != 0:
-            # Use decompressobj() like relic does
-            decompressor = zlib.decompressobj()
-            data = decompressor.decompress(bytes(compressed_data))
-            data += decompressor.flush()
-        else:
-            data = bytes(compressed_data)
-
-        return data
-
-    def read_files_parallel(
-        self, file_paths: List[str], num_workers: int = 16
-    ) -> List[Tuple[str, bytes, str | None]]:
-        """Read and decompress files in PARALLEL."""
-        if self._mmap_handle is None:
-            self.open_mmap()
-
-        def read_decompress(file_path: str) -> Tuple[str, bytes, str | None]:
-            try:
-                data = self.read_file(file_path)
-                return (file_path, data, None)
-            except Exception as e:
-                return (file_path, b"", str(e))
-
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            results = list(executor.map(read_decompress, file_paths))
-
-        return results
+    #
+    # def read_file(self, file_path: str) -> bytes:
+    #     """Read file using mmap + decompress.
+    #
+    #     Args:
+    #         file_path: Full path to file
+    #
+    #     Returns:
+    #         Decompressed file data
+    #     """
+    #     # Normalize path (convert backslashes to forward slashes)
+    #     file_path = file_path.replace("\\", "/").strip("/")
+    #
+    #     if file_path not in self._files:
+    #         raise KeyError(f"File not found: {file_path}")
+    #
+    #     entry = self._files[file_path]
+    #
+    #     # Open mmap if needed
+    #     if self._mmap_handle is None:
+    #         self.open_mmap()
+    #
+    #     # Read compressed data from TRUE byte offset!
+    #     compressed_data: bytes = self._mmap_handle[
+    #         entry.data_offset : entry.data_offset + entry.compressed_size
+    #     ]  # type:ignore
+    #
+    #     # Decompress if needed (storage_type: 0=STORE, 1=STREAM_COMPRESS, 2=BUFFER_COMPRESS)
+    #     if entry.storage_type != 0:
+    #         # Use decompressobj() like relic does
+    #         decompressor = zlib.decompressobj()
+    #         data = decompressor.decompress(bytes(compressed_data))
+    #         data += decompressor.flush()
+    #     else:
+    #         data = bytes(compressed_data)
+    #
+    #     return data
+    #
+    # def read_files_parallel(
+    #     self, file_paths: List[str], num_workers: int = 16
+    # ) -> List[Tuple[str, bytes, str | None]]:
+    #     """Read and decompress files in PARALLEL."""
+    #     if self._mmap_handle is None:
+    #         self.open_mmap()
+    #
+    #     def read_decompress(file_path: str) -> Tuple[str, bytes, str | None]:
+    #         try:
+    #             data = self.read_file(file_path)
+    #             return (file_path, data, None)
+    #         except Exception as e:
+    #             return (file_path, b"", str(e))
+    #
+    #     with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    #         results = list(executor.map(read_decompress, file_paths))
+    #
+    #     return results
 
     def list_files(self) -> List[str]:
         """Get list of all files."""
         return list(self._files.keys())
 
-    def __enter__(self) -> NativeReaderV2:
+    def __enter__(self) -> NativeParserV2:
         self.open_mmap()
         return self
 

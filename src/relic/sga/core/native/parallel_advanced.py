@@ -24,15 +24,15 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 
-from relic.sga.core.definitions import OSFlags
+from relic.sga.core.definitions import OSFlags, StorageType
 from relic.sga.core.native.definitions import (
     FileEntry,
     ExtractionStats,
     ExtractionPlan,
     ExtractionPlanCategory,
 )
-from relic.sga.core.native.v2 import NativeReaderV2
-
+from relic.sga.core.native.native_reader import SgaReader
+from relic.sga.core.native.v2 import NativeParserV2
 
 
 def _categorize_by_size(
@@ -81,6 +81,8 @@ def _categorize_by_size(
             )
 
     return categories
+
+
 class AdvancedParallelUnpacker:
     """Advanced parallel unpacker with comprehensive optimizations."""
 
@@ -208,72 +210,6 @@ class AdvancedParallelUnpacker:
         )
         return batches
 
-    def _extract_file_isolated(
-        self,
-        sga_path: str,
-        output_dir: str,
-        entry: FileEntry,
-        dst_path: str,
-    ) -> Tuple[bool, str, Optional[str]]:
-        """Extract single file using isolated handle with NATIVE Python file operations.
-
-        Uses native Python Path/open for output (FAST on Windows!) and fs library
-        only for reading from SGA (necessary).
-
-        Args:
-            sga_path: Path to SGA archive
-            output_dir: Output directory
-            entry: File entry metadata
-            dst_path: Destination path
-
-        Returns:
-            Tuple of (success, path, error_message)
-        """
-        bytes_written = 0
-
-        try:
-            # Get native destination path
-            native_dst = Path(output_dir) / dst_path.lstrip("/")
-
-            # Create parent directory (CACHED for speed!)
-            self._ensure_directory(native_dst.parent)
-
-            # Open SGA and extract file
-            with open_internal_file(sga_path, entry) as src_file:
-                # Extract with chunked reading (use NATIVE Python file for writing!)
-                with open(native_dst, "wb") as dst_file:
-                    while True:
-                        chunk = src_file.read(self.chunk_size)
-                        if not chunk:
-                            break
-                        dst_file.write(chunk)
-                        bytes_written += len(chunk)
-
-                    # Flush to disk
-                    dst_file.flush()
-                    try:
-                        os.fsync(dst_file.fileno())
-                    except (AttributeError, OSError):
-                        pass
-
-                # Verify
-                if bytes_written == 0 and entry.decompressed_size > 0:
-                    return (False, entry.path, "No data written")
-
-                # Preserve timestamps
-                try:
-                    if entry.modified:
-                        timestamp = entry.modified.timestamp()
-                        os.utime(native_dst, (timestamp, timestamp))
-                except Exception:
-                    pass
-
-                return (True, entry.path, None)
-
-        except Exception as e:
-            error_msg = f"Failed to extract {entry.path}: {str(e)}"
-            self.logger.error(error_msg)
-            return (False, entry.path, error_msg)
 
     def _extract_batch_isolated(
         self,
@@ -300,7 +236,7 @@ class AdvancedParallelUnpacker:
 
         try:
             # Open SGA once for entire batch
-            with open_fs(sga_path, default_protocol="sga") as my_sga:
+            with SgaReader(sga_path) as my_sga:
                 for entry, dst_path in zip(batch, dst_paths):
                     try:
                         # Get native destination path
@@ -313,7 +249,7 @@ class AdvancedParallelUnpacker:
                         # For small files, use smaller chunks (64KB) for better responsiveness
                         small_chunk = 64 * 1024  # 64KB - perfect for small files
                         bytes_written = 0
-                        with my_sga.open(entry.path, "rb") as src_file:
+                        with my_sga.read_file(entry) as src_file:
                             with open(
                                 native_dst, "wb", buffering=small_chunk
                             ) as dst_file:
@@ -367,29 +303,24 @@ class AdvancedParallelUnpacker:
 
         # FAST MODE: Skip metadata collection, just get file paths!
         self.logger.info("Collecting file paths...")
-        with open_fs(sga_path, default_protocol="sga") as sga:
-            file_paths = list(sga.walk.files())
+        with NativeParserV2(sga_path) as sga:
+            entries = list(sga._files.values())
 
         # Apply filter if provided (DELTA MODE!)
         if file_filter is not None:
             file_filter_set = set(file_filter)
-            file_paths = [p for p in file_paths if p in file_filter_set]
-            self.logger.info(f"Filtered to {len(file_paths)} changed files")
+            entries = [p for p in entries if p.path in file_filter_set]
+            self.logger.info(f"Filtered to {len(entries)} changed files")
 
-        self.stats.total_files = len(file_paths)
-        self.logger.info(f"Found {len(file_paths)} files")
+        self.stats.total_files = len(entries)
+        self.logger.info(f"Found {len(entries)} files")
 
-        # Create simple FileEntry objects (minimal overhead)
-        entries = [
-            FileEntry(path=p, decompressed_size=0, compressed_size=0, storage_type=0, data_offset=0)
-            for p in file_paths
-        ]
 
         # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
         self.logger.info("Pre-creating directory structure...")
         unique_dirs = set()
-        for file_path in file_paths:
-            dst_path = Path(output_dir) / file_path.lstrip("/")
+        for file in entries:
+            dst_path = Path(output_dir) / file.path.lstrip("/")
             unique_dirs.add(dst_path.parent)
 
         for dir_path in unique_dirs:
@@ -486,21 +417,21 @@ class AdvancedParallelUnpacker:
         # Get file list
         t0 = time_module.perf_counter()
         self.logger.info("Collecting file paths...")
-        with open_fs(sga_path, default_protocol="sga") as sga:
-            file_paths = list(sga.walk.files())
+        with NativeParserV2(sga_path) as sga:
+            files = list(sga._files.values())
         timings["file_listing"] = time_module.perf_counter() - t0
 
-        self.stats.total_files = len(file_paths)
+        self.stats.total_files = len(files)
         self.logger.info(
-            f"Found {len(file_paths)} files (took {timings['file_listing']:.2f}s)"
+            f"Found {len(files)} files (took {timings['file_listing']:.2f}s)"
         )
 
         # PRE-CREATE ALL DIRECTORIES
         t0 = time_module.perf_counter()
         self.logger.info("Pre-creating directory structure...")
         unique_dirs = set()
-        for file_path in file_paths:
-            dst_path = Path(output_dir) / file_path.lstrip("/")
+        for file in files:
+            dst_path = Path(output_dir) / file.path.lstrip("/")
             unique_dirs.add(dst_path.parent)
 
         for dir_path in unique_dirs:
@@ -523,8 +454,8 @@ class AdvancedParallelUnpacker:
         # Batch files
         batch_size = 50
         file_batches = [
-            file_paths[i : i + batch_size]
-            for i in range(0, len(file_paths), batch_size)
+            files[i : i + batch_size]
+            for i in range(0, len(files), batch_size)
         ]
         self.logger.info(
             f"Processing {len(file_batches)} batches of {batch_size} files"
@@ -533,20 +464,19 @@ class AdvancedParallelUnpacker:
         processed = [0]
         lock = threading.Lock()
 
-        def process_batch(batch: list[str]) -> dict[str, int]:
+        def process_batch(batch: list[FileEntry]) -> dict[str, int]:
             """Process batch with dedicated SGA handle."""
             local_stats = {"extracted": 0, "failed": 0, "bytes": 0}
 
             # Each worker opens its own SGA
-            with open_fs(sga_path, default_protocol="sga") as sga:
-                for file_path in batch:
+            with SgaReader(sga_path) as sga:
+                for file in batch:
                     try:
                         # Read and decompress (fs handles this)
-                        with sga.open(file_path, "rb") as f:
-                            data = f.read()
+                        data = sga.read_buffer(file)
 
                         # Write to disk
-                        dst_path = Path(output_dir) / file_path.lstrip("/")
+                        dst_path = Path(output_dir) / file.path.lstrip("/")
                         fd = os.open(
                             dst_path,
                             OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
@@ -560,7 +490,7 @@ class AdvancedParallelUnpacker:
                     except Exception as e:
                         local_stats["failed"] += 1
                         if local_stats["failed"] <= 3:
-                            self.logger.error(f"Failed {file_path}: {e}")
+                            self.logger.error(f"Failed {file.path}: {e}")
 
             # Update global stats
             with lock:
@@ -634,7 +564,7 @@ class AdvancedParallelUnpacker:
 
         # Get file list using native reader
         self.logger.info("Collecting file paths...")
-        native_reader = NativeReaderV2(sga_path)
+        native_reader = NativeParserV2(sga_path)
         file_paths = native_reader.list_files()
         native_reader.close()
 
@@ -690,27 +620,26 @@ class AdvancedParallelUnpacker:
         total_processed = [0]
         processing_lock = threading.Lock()
 
-        def reader_thread(file_list: list[str], reader_id: int) -> None:
+        def reader_thread(file_list: list[FileEntry], reader_id: int) -> None:
             """Thread-local SGA handle reader."""
             try:
                 # Each reader creates its own NativeSGAReader with thread-local handle
-                reader = NativeReaderV2(sga_path)
-                for file_path in file_list:
-                    try:
-                        data = reader.read_file(file_path)
+                with SgaReader(sga_path) as reader:
+                    for file in file_list:
+                        try:
+                            data = reader.read_buffer(file)
 
-                        with deque_not_empty:
-                            while len(file_deque) >= buffer_size:
-                                deque_not_empty.wait(0.001)
-                            file_deque.append((file_path, data, None))
-                            deque_not_empty.notify()
-                    except Exception as e:
-                        with deque_not_empty:
-                            while len(file_deque) >= buffer_size:
-                                deque_not_empty.wait(0.001)
-                            file_deque.append((file_path, None, str(e)))
-                            deque_not_empty.notify()
-                reader.close()
+                            with deque_not_empty:
+                                while len(file_deque) >= buffer_size:
+                                    deque_not_empty.wait(0.001)
+                                file_deque.append((file.path, data, None))
+                                deque_not_empty.notify()
+                        except Exception as e:
+                            with deque_not_empty:
+                                while len(file_deque) >= buffer_size:
+                                    deque_not_empty.wait(0.001)
+                                file_deque.append((file.path, None, str(e)))
+                                deque_not_empty.notify()
             finally:
                 with processing_lock:
                     active_readers[0] -= 1
@@ -831,8 +760,8 @@ class AdvancedParallelUnpacker:
         # Parse SGA
         t0 = time_module.perf_counter()
         self.logger.info("Parsing SGA binary format...")
-        reader = NativeReaderV2(sga_path, verbose=False)
-        files = reader.list_files()
+        reader = NativeParserV2(sga_path, verbose=True)
+        files = list(reader._files.values())
         t_parse = time_module.perf_counter() - t0
 
         self.stats.total_files = len(files)
@@ -843,7 +772,7 @@ class AdvancedParallelUnpacker:
         self.logger.info("Creating directory structure...")
         unique_dirs = set()
         for file_path in files:
-            dst_path = Path(output_dir) / file_path.lstrip("/")
+            dst_path = Path(output_dir) / file_path.path.lstrip("/")
             unique_dirs.add(dst_path.parent)
 
         for dir_path in unique_dirs:
@@ -859,7 +788,8 @@ class AdvancedParallelUnpacker:
         # Read all files with parallel decompression
         t0 = time_module.perf_counter()
         self.logger.info(f"Reading + decompressing {len(files)} files (parallel)...")
-        results = reader.read_files_parallel(files, num_workers=16)
+        with SgaReader(sga_path) as reader:
+            results = reader.read_files_parallel(files, num_workers=16)
         t_read = time_module.perf_counter() - t0
 
         self.logger.info(f"Read + decompressed in {t_read:.2f}s")
@@ -906,6 +836,7 @@ class AdvancedParallelUnpacker:
                         break
             else:
                 self.stats.failed_files += 1
+                self.logger.error(f"Failed to write {path}: {err}")
 
         # Re-enable GC
         if gc_was_enabled:
@@ -941,7 +872,7 @@ class AdvancedParallelUnpacker:
 
         return self.stats
 
-    def _calculate_checksum(self, file_path: str, fs: FS) -> str:
+    def _calculate_checksum(self, entry: FileEntry, reader: SgaReader) -> str:
         """Calculate MD5 checksum for a file.
 
         Args:
@@ -953,14 +884,14 @@ class AdvancedParallelUnpacker:
         """
         hasher = hashlib.md5()
 
-        with fs.open(file_path, "rb") as f:
+        with reader.read_file(entry) as f:
             while chunk := f.read(self.chunk_size):
                 hasher.update(chunk)
 
         return hasher.hexdigest()
 
     def _calculate_checksum_isolated(
-        self, sga_path: str, file_path: str
+        self, sga_path: str, entry: FileEntry
     ) -> Tuple[str, Optional[str], Optional[str]]:
         """Calculate checksum with isolated SGA handle.
 
@@ -972,11 +903,11 @@ class AdvancedParallelUnpacker:
             Tuple of (file_path, checksum, error)
         """
         try:
-            with open_fs(sga_path, default_protocol="sga") as sga:
-                checksum = self._calculate_checksum(file_path, sga)
-                return (file_path, checksum, None)
+            with SgaReader(sga_path) as sga:
+                checksum = self._calculate_checksum(entry, sga)
+                return (entry.path, checksum, None)
         except Exception as e:
-            return (file_path, None, str(e))
+            return (entry.path, None, str(e))
 
     def _build_manifest(self, sga_path: str) -> Dict[str, str]:
         """Build manifest of file checksums using parallel processing.
@@ -990,10 +921,10 @@ class AdvancedParallelUnpacker:
         manifest = {}
 
         # Collect all file paths first
-        with open_fs(sga_path, default_protocol="sga") as sga:
-            file_paths = list(sga.walk.files())
+        with NativeParserV2(sga_path) as sga:
+            file_entries = list(sga._files.values())
 
-        self.logger.info(f"Calculating checksums for {len(file_paths)} files...")
+        self.logger.info(f"Calculating checksums for {len(file_entries)} files...")
 
         # Calculate checksums in parallel
         with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
@@ -1001,7 +932,7 @@ class AdvancedParallelUnpacker:
                 executor.submit(
                     self._calculate_checksum_isolated, sga_path, file_path
                 ): file_path
-                for file_path in file_paths
+                for file_path in file_entries
             }
 
             processed = 0
@@ -1016,7 +947,7 @@ class AdvancedParallelUnpacker:
                 processed += 1
                 if processed % 1000 == 0:
                     self.logger.info(
-                        f"  Checksummed {processed}/{len(file_paths)} files"
+                        f"  Checksummed {processed}/{len(file_entries)} files"
                     )
 
         self.logger.info(f"Checksum calculation complete: {len(manifest)} files")
@@ -1222,7 +1153,7 @@ class AdvancedParallelUnpacker:
         Returns:
             Dictionary with extraction plan details
         """
-        native_sga = NativeReaderV2(sga_path)
+        native_sga = NativeParserV2(sga_path)
         entries = list(native_sga._files.values())
 
         categories = _categorize_by_size(entries,logger=self.logger)
@@ -1257,3 +1188,7 @@ class AdvancedParallelUnpacker:
         plan.estimated_time_seconds = plan.total_bytes / effective_throughput
 
         return plan
+
+if __name__ == "__main__":
+    from relic.core import CLI
+    CLI.run_with("relic", "sga", "unpack", r"A:\Steam\Launcher\steamapps\common\Dawn of War Definitive Edition\W40k\W40kData-SharedTextures-Definitive.sga", r"A:\Steam\Launcher\steamapps\common\Dawn of War Definitive Edition\W40k\STDump")

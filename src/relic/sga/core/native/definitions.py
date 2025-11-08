@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
-from typing import Optional, List
 
+from relic.sga.core.definitions import StorageType
 
 
 @dataclass(slots=True)
@@ -14,9 +14,8 @@ class FileEntry:
     data_offset: int  # Absolute byte offset in .sga file
     compressed_size: int
     decompressed_size: int
-    storage_type: int  # 0=uncompressed, 1/2=zlib
-    modified:datetime.datetime|None = Noned
-
+    storage_type: StorageType
+    modified:datetime.datetime|None = None
 
 
 @dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
