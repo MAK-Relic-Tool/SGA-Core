@@ -13,7 +13,7 @@ import os
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import Any, List, Tuple
+from typing import Any, List
 
 from relic.core.errors import MismatchError
 
@@ -45,7 +45,7 @@ class SgaReader:
             return raw
         if entry.storage_type in [StorageType.STORE]:
             return raw
-        elif entry.storage_type in [
+        if entry.storage_type in [
             StorageType.BUFFER_COMPRESS,
             StorageType.STREAM_COMPRESS,
         ]:
@@ -53,9 +53,11 @@ class SgaReader:
             if len(zlib_buffer) != entry.decompressed_size:
                 raise MismatchError(
                     "size mismatch", len(zlib_buffer), entry.decompressed_size
-                )  # TODO
+                )
             return zlib_buffer
-        raise NotImplementedError  # TODO
+        raise NotImplementedError(
+            f"read_buffer does not support StorageType='{entry.storage_type}'"
+        )  # TODO
 
     def read_file(self, entry: FileEntry, decompress: bool = True) -> BytesIO:
         return BytesIO(self.read_buffer(entry, decompress))
@@ -84,8 +86,6 @@ class SgaReader:
                 self._sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
             )
             self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
-        if self._mmap_handle is None:
-            raise Exception("failed to init mmap")
 
     def close(self) -> None:
         """Close memory-mapped access."""

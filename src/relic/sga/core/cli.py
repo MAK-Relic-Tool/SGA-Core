@@ -9,13 +9,11 @@ from io import StringIO
 from json import JSONEncoder
 from logging import Logger
 from typing import Optional, Any, Dict
-
-import relic.core.cli
 from fs import open_fs
 from fs.base import FS
 from fs.copy import copy_fs
+import relic.core.cli
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin, RelicArgParser
-
 from relic.sga.core.definitions import MAGIC_WORD
 from relic.sga.core.essencefs import EssenceFS
 from relic.sga.core.essencefs.opener import registry as sga_registry
@@ -168,7 +166,8 @@ class RelicSgaUnpackCli(CliPlugin):
                 return _SUCCESS
 
             except Exception as e:
-                logger.warning(f"Fast extraction failed: {e}")
+                logger.warning(f"Fast extraction failed:")
+                logger.exception(e)
                 if use_legacy:
                     logger.info("Falling back to compatible mode...")
                 else:
@@ -274,7 +273,7 @@ class RelicSgaInfoCli(CliPlugin):
             os.makedirs(outjson_dir, exist_ok=True)
             outjson = os.path.join(outjson_dir, outjson_file)
 
-            with open(outjson, "w", encoding=None) as info_h:
+            with open(outjson, "w", encoding="utf8") as info_h:
                 json_kwargs: Dict[str, Any] = (
                     self._JSON_MINIFY_KWARGS if minify else self._JSON_MAXIFY_KWARGS
                 )
@@ -343,10 +342,10 @@ class RelicSgaVersionCli(CliPlugin):
                 if not MAGIC_WORD.check(sga, advance=True):
                     logger.warning("File is not an SGA")
                     return _FAIL
-                else:
-                    version = VersionSerializer.read(sga)
-                    logger.info(version)
-                    return _SUCCESS
+
+                version = VersionSerializer.read(sga)
+                logger.info(version)
+                return _SUCCESS
         except IOError:  # pragma: nocover
             # I don't know how to force an io error here for coverage testing
             # we safely handle bad file paths
@@ -374,5 +373,4 @@ class RelicSgaListCli(CliPlugin):
             logger.info(key)
         if len(keys) == 0:
             logger.info("No Plugins Found!")
-
         return None

@@ -65,10 +65,6 @@ class FileCategory(StrEnum):
 def _categorize_by_size(
     entries: List[FileEntry], logger: logging.Logger
 ) -> Dict[str, List[FileEntry]]:
-    SIZE_TINY = 10 * 1024  # 10KB
-    SIZE_SMALL = 1024 * 1024  # 1MB
-    SIZE_MEDIUM = 10 * 1024 * 1024  # 10MB
-    SIZE_LARGE = 100 * 1024 * 1024  # 100MB
     """Categorize files by size for optimal scheduling.
 
     Args:
@@ -77,6 +73,11 @@ def _categorize_by_size(
     Returns:
         Dictionary mapping category to file list
     """
+    SIZE_TINY = 10 * 1024  # 10KB
+    SIZE_SMALL = 1024 * 1024  # 1MB
+    SIZE_MEDIUM = 10 * 1024 * 1024  # 10MB
+    SIZE_LARGE = 100 * 1024 * 1024  # 100MB
+
     categories: dict[str, list[FileEntry]] = {
         "tiny": [],  # < 10KB
         "small": [],  # 10KB - 1MB
@@ -130,7 +131,9 @@ class _ExtractStrategy:
         on_progress: Optional[ProgressCallback] = None,
         **kwargs: Any,
     ) -> ExtractionStats:
-        raise NotImplementedError()
+        raise NotImplementedError(
+            f"{self.__class__.__qualname__}.extract(...) is not implemented"
+        )
 
     def _start(self, name: str, sga_path: str) -> None:
         self.logger.info(
@@ -144,7 +147,7 @@ class _ExtractStrategy:
         self, sga_path: str, file_filter: Optional[Sequence[str]] = None
     ) -> list[FileEntry]:
         self.logger.info("Collecting file paths...")
-        entries = NativeParserV2(sga_path).parse()
+        entries = NativeParserV2(sga_path, self.logger).parse()
 
         # Apply filter if provided (DELTA MODE!)
         if file_filter is not None:
@@ -220,7 +223,7 @@ class _ExtractStrategy:
                         native_dst = Path(output_dir) / dst_path.lstrip("/")
 
                         # Create parent directory (CACHED for speed!)
-                        self.cache._ensure_directory(native_dst.parent)
+                        self.cache.ensure_directory(native_dst.parent)
 
                         # Extract with chunked reading (use NATIVE Python file for writing!)
                         # For small files, use smaller chunks (64KB) for better responsiveness
@@ -383,11 +386,12 @@ class OptimizedStrategy(_ExtractStrategy):
 
 
 class StreamingStrategy(_ExtractStrategy):
-    def extract_streaming_native(
+    def extract(
         self,
         sga_path: str,
         output_dir: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        **kwargs: Any,
     ) -> ExtractionStats:
         """PHASE 2: Multi-reader streaming with thread-local SGA handles.
 
@@ -437,7 +441,7 @@ class StreamingStrategy(_ExtractStrategy):
             total_processed = [0]
             processing_lock = threading.Lock()
 
-            def reader_thread(file_list: list[FileEntry], reader_id: int) -> None:
+            def reader_thread(file_list: list[FileEntry], _reader_id: int) -> None:
                 """Thread-local SGA handle reader."""
                 try:
                     # Each reader creates its own NativeSGAReader with thread-local handle
@@ -562,20 +566,12 @@ class UltraFastStrategy(_ExtractStrategy):
         - Parallel decompression
         - Target: 3-5 seconds (vs 12s)
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         self._start("ULTRA-FAST", sga_path)
 
-        timings = {"file_listing": 0.0, "dir_creation": 0.0, "extraction": 0.0}
-
         # Get file list
-        with self._timer() as timer:
-            files = self._collect(sga_path)
-            timings["file_listing"] = timer()
-
-        with self._timer() as timer:
-            self._create_dirs(files, output_dir)
-            timings["dir_creation"] = timer()
+        files = self._collect(sga_path)
+        self._create_dirs(files, output_dir)
 
         with self._disable_gc():
             # Use MANY parallel workers (each opens own SGA handle)
@@ -638,8 +634,7 @@ class UltraFastStrategy(_ExtractStrategy):
                             future.result()
                         except Exception as e:
                             self.logger.error(f"Batch failed: {e}")
-
-            timings["extraction"] = timer()
+                t_extract = timer()
 
             # Final progress
             if on_progress:
@@ -647,9 +642,9 @@ class UltraFastStrategy(_ExtractStrategy):
 
         # Summary
         self._print_summary()
-        self.logger.info(f"  Time:       {timings['extraction']:.2f}s")
+        self.logger.info(f"  Time:       {t_extract:.2f}s")
         self.logger.info(
-            f"  Throughput: {self.stats.extracted_bytes / timings['extraction'] / 1024 / 1024:.0f} MB/s"
+            f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
         )
         return self.stats
 
@@ -790,7 +785,7 @@ class DirectoryCacher:
         self._dir_cache: Set[str] = set()
         self._dir_cache_lock = threading.Lock()
 
-    def _ensure_directory(self, dir_path: Path) -> None:
+    def ensure_directory(self, dir_path: Path) -> None:
         """Ensure directory exists with caching to avoid redundant mkdir calls.
 
         Args:
@@ -994,7 +989,7 @@ class DeltaStrategy(_ExtractStrategy):
             return None
 
         try:
-            with open(manifest_path, "r") as f:
+            with open(manifest_path, "r", encoding="utf8") as f:
                 return json.load(f)  # type: ignore
         except Exception as e:
             self.logger.warning(f"Could not load previous manifest: {e}")
@@ -1011,7 +1006,7 @@ class DeltaStrategy(_ExtractStrategy):
 
         try:
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(manifest_path, "w") as f:
+            with open(manifest_path, "w", encoding="utf8") as f:
                 json.dump(manifest, f, indent=2)
         except Exception as e:
             self.logger.warning(f"Could not save manifest: {e}")
@@ -1034,7 +1029,7 @@ class DeltaStrategy(_ExtractStrategy):
             Extraction statistics
         """
         self.logger.info("Delta extraction mode enabled")
-
+        self.stats = ExtractionStats()
         # Load previous manifest
         previous_manifest = self._load_previous_manifest(output_dir)
 
@@ -1109,11 +1104,15 @@ class DeltaStrategy(_ExtractStrategy):
 
 
 class ExtractionMethod(IntEnum):
-    Optimized = 0
-    Streaming = 1
-    UltraFast = 2
-    Native = 3
-    Delta = 4
+    """
+    Sorted by general performance
+    """
+
+    UltraFast = 0  # ~3.5 seconds for DoW1:DE / 20 archives claimed best
+    Optimized = 1  # ~4.1 seconds for
+    Streaming = 2
+    Native = 3  # ~4.6 seconds for DoW1:DE / 17 archives claimed best
+    Delta = 4  # untested;
 
 
 class AdvancedParallelUnpacker:
@@ -1132,27 +1131,28 @@ class AdvancedParallelUnpacker:
         """
         self._config = config
         self._cache = DirectoryCacher()
-        self._optimized = OptimizedStrategy(self._config, self._cache)
-        self._streaming = StreamingStrategy(self._config, self._cache)
-        self._ultrafast = UltraFastStrategy(self._config, self._cache)
-        self._ultrafast_native = NativeUltraFastStrategy(self._config, self._cache)
-        self._delta = DeltaStrategy(self._config, self._cache, self._optimized)
+        _optimized = OptimizedStrategy(self._config, self._cache)
+        _streaming = StreamingStrategy(self._config, self._cache)
+        _ultrafast = UltraFastStrategy(self._config, self._cache)
+        _native = NativeUltraFastStrategy(self._config, self._cache)
+        _delta = DeltaStrategy(self._config, self._cache, _optimized)
         self._strategies = {
-            ExtractionMethod.Optimized: self._optimized,
-            ExtractionMethod.Streaming: self._streaming,
-            ExtractionMethod.UltraFast: self._ultrafast,
-            ExtractionMethod.Native: self._ultrafast_native,
-            ExtractionMethod.Delta: self._delta,
+            ExtractionMethod.Optimized: _optimized,
+            ExtractionMethod.Streaming: _streaming,
+            ExtractionMethod.UltraFast: _ultrafast,
+            ExtractionMethod.Native: _native,
+            ExtractionMethod.Delta: _delta,
         }
+        self._default_extractor = _ultrafast
 
     def extract(
         self,
         sga_path: str,
         output_dir: str,
-        on_progress: Callable[[int, int], None],
-        method: ExtractionMethod = ExtractionMethod.Native,
+        on_progress: Callable[[int, int], None] | None = None,
+        method: ExtractionMethod = ExtractionMethod.UltraFast,  # Based on
     ) -> ExtractionStats:
-        extractor = self._strategies.get(method, self._ultrafast_native)
+        extractor = self._strategies.get(method, self._default_extractor)
         stats = extractor.extract(sga_path, output_dir, on_progress)
         return stats
 
@@ -1175,19 +1175,19 @@ class AdvancedParallelUnpacker:
             return min(num_workers * 2, file_count)
 
         # Small files: Standard workers
-        elif category == "small":
+        if category == "small":
             return num_workers
 
         # Medium files: Standard workers
-        elif category == "medium":
+        if category == "medium":
             return num_workers
 
         # Large files: Fewer workers (high memory per file)
-        elif category == "large":
+        if category == "large":
             return max(2, num_workers // 2)
 
         # Huge files: Minimal workers (very high memory)
-        elif category == "huge":
+        if category == "huge":
             return max(1, num_workers // 4)
 
         return num_workers
