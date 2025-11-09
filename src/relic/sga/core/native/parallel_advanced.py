@@ -116,7 +116,7 @@ ProgressCallback: TypeAlias = Callable[[int, int], None]
 class _ExtractStrategy:
     def __init__(self, config: UnpackerConfig, cache: DirectoryCacher):
         self.stats: ExtractionStats = None  # type: ignore
-        self.cache = cache
+        self.directories = cache
 
         self.num_workers = config.num_workers or multiprocessing.cpu_count()
         self.logger = config.logger or logging.getLogger(__name__)
@@ -164,10 +164,7 @@ class _ExtractStrategy:
         unique_dirs = set()
         for file in entries:
             dst_path = Path(output_dir) / file.path.lstrip("/")
-            unique_dirs.add(dst_path.parent)
-
-        for dir_path in unique_dirs:  # TODO; use cache?
-            dir_path.mkdir(parents=True, exist_ok=True)
+            self.directories.ensure_directory(dst_path)
 
         self.logger.info(f"Created {len(unique_dirs)} directories")
 
@@ -223,7 +220,7 @@ class _ExtractStrategy:
                         native_dst = Path(output_dir) / dst_path.lstrip("/")
 
                         # Create parent directory (CACHED for speed!)
-                        self.cache.ensure_directory(native_dst.parent)
+                        self.directories.ensure_directory(native_dst.parent)
 
                         # Extract with chunked reading (use NATIVE Python file for writing!)
                         # For small files, use smaller chunks (64KB) for better responsiveness
@@ -774,28 +771,33 @@ class UnpackerConfig:
     logger: Optional[logging.Logger] = None
     enable_adaptive_threading: bool = True
     enable_batching: bool = True
-    # enable_delta: bool = False # moved to it's own Strategy; explictly call extract with delta
+    # enable_delta: bool = False # moved to its own Strategy; explictly call extract with delta
     chunk_size: int = 1024 * 1024
 
 
 class DirectoryCacher:
-    # Moved to it's own class to allow strategies to reference the same
+    # Moved to its own class to allow strategies to reference the same cacher
     def __init__(self) -> None:
         # Thread-safe directory cache to avoid redundant mkdir calls
         self._dir_cache: Set[str] = set()
         self._dir_cache_lock = threading.Lock()
 
-    def ensure_directory(self, dir_path: Path) -> None:
+    def ensure_directory(self, dir_path: Path) -> bool:
         """Ensure directory exists with caching to avoid redundant mkdir calls.
+
 
         Args:
             dir_path: Directory path to create
+
+        Returns:
+            bool: True if directory was created, False otherwise
         """
+        CREATED = True
         dir_str = str(dir_path)
 
         # Fast path: check if already created
         if dir_str in self._dir_cache:
-            return
+            return not CREATED
 
         # Slow path: create and cache
         with self._dir_cache_lock:
@@ -803,7 +805,9 @@ class DirectoryCacher:
             if dir_str not in self._dir_cache:
                 dir_path.mkdir(parents=True, exist_ok=True)
                 self._dir_cache.add(dir_str)
+                return CREATED
 
+        return not CREATED
 
 class ProgressiveStrategy(_ExtractStrategy):
     def __init__(
@@ -1105,13 +1109,16 @@ class DeltaStrategy(_ExtractStrategy):
 
 class ExtractionMethod(IntEnum):
     """
-    Sorted by general performance
+    Extraction Strategy to use;
+
+    Names and enum values do not correlate to performance.
+    Generally; use UltraFast or Native for best performance.
     """
 
-    UltraFast = 0  # ~3.5 seconds for DoW1:DE / 20 archives claimed best
-    Optimized = 1  # ~4.1 seconds for
+    UltraFast = 0
+    Optimized = 1
     Streaming = 2
-    Native = 3  # ~4.6 seconds for DoW1:DE / 17 archives claimed best
+    Native = 3
     Delta = 4  # untested;
 
 
@@ -1131,6 +1138,7 @@ class AdvancedParallelUnpacker:
         """
         self._config = config
         self._cache = DirectoryCacher()
+        # define strategies as local variables to reuse them IF needed
         _optimized = OptimizedStrategy(self._config, self._cache)
         _streaming = StreamingStrategy(self._config, self._cache)
         _ultrafast = UltraFastStrategy(self._config, self._cache)
