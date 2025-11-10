@@ -24,10 +24,18 @@ class ExtractionTimings:
     creating_dirs:float = 0
     creating_batches:float = 0
     executing_batches:float = 0
-    # parsing_results:float = 0
+    parsing_results:float = 0
+
     @property
     def total_time(self):
-        return sum([self.parsing_sga,self.filtering_files,self.creating_dirs,self.creating_batches,self.executing_batches])
+        return sum([
+            self.parsing_sga,
+            self.filtering_files,
+            self.creating_dirs,
+            self.creating_batches,
+            self.executing_batches,
+            self.parsing_results
+        ])
 
 
 

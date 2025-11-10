@@ -37,14 +37,16 @@ def _timer() -> Generator[Callable[[], float], Any, None]:
 
 
 METHODS = [
-    ExtractionMethod.Native,
-    ExtractionMethod.Optimized,
-    ExtractionMethod.UltraFast,
+    ExtractionMethod.Native, # parallel read / parallel write
+    # ExtractionMethod.Optimized, # batch read-write; update results
+    # ExtractionMethod.UltraFast, # batch read-write; delayed update results
+    # ExtractionMethod.Serial, # serial read / write # ignored; runtime is linear to size of file, not workers
 ]
 _WORKERS = multiprocessing.cpu_count()
 run_workers = sorted(
-    [int(_) for _ in {*[_WORKERS // (2 ** p) for p in range(8)], _WORKERS, *[_WORKERS * (2 ** p) for p in range(8)]} if
+    [int(_) for _ in {*[_WORKERS // (2 ** p) for p in range(8)], _WORKERS, _WORKERS * 2, _WORKERS * 4, _WORKERS * 8} if
      _ > 0])
+
 
 
 def run_serial(path:str):
@@ -53,6 +55,7 @@ def run_serial(path:str):
         logger=logger,
         disable_gc=True,
         native_files=False,
+        verbose=False
     )
     unpacker = AdvancedParallelUnpacker(cfg)
 
@@ -111,6 +114,7 @@ def run_worker_metric(path:str):
             json.dump(timings, h, indent=4)
     except Exception as e:
         traceback.print_exception(e)
+    return timings
 
 
 def print_avg_timings(timings: dict[ExtractionMethod, list[float]]):
@@ -141,18 +145,18 @@ def print_best_run(timings: dict[ExtractionMethod, list[float]]):
         print(f"\tBest [{best_method.name}]: {best:.3f}\n\tWorst [{worst_method.name}]: {worst:.3f}" )
         print()
 
-def run_serial_optimized_comp(path:str):
+def run_comparisons(path:str):
     cfg = UnpackerConfig(
         num_workers=multiprocessing.cpu_count(),
         logger=logger,
         disable_gc=True,
         native_files=False,
         verbose=False,
-        precreate_dirs=True
+        precache_dirs=True
     )
     unpacker = AdvancedParallelUnpacker(cfg)
-    _METHODS = [ExtractionMethod.Serial, ExtractionMethod.Optimized]
-    _RUNS = 3 # len(run_workers)
+    _METHODS = [ExtractionMethod.Serial, ExtractionMethod.Optimized,  ExtractionMethod.UltraFast, ExtractionMethod.Native]
+    _RUNS = 1 # len(run_workers)
     for method in _METHODS:
         with tempfile.TemporaryDirectory() as tmpdir:
             tot_ts = []
@@ -184,7 +188,11 @@ def run_serial_optimized_comp(path:str):
 
 if __name__ == "__main__":
     _path = sys.argv[1]
-    # with open(r"C:\Users\moder\OneDrive\Documents\GitHub\SGA-Core\tests\profiling\prof\2025-11-10T00_30_35.894504.json", "r") as f:
-    #     _timings = {ExtractionMethod(int(k)):v for k, v in json.load(f).items()}
-    run_serial_optimized_comp(_path)
-    # print_best_run(timings)
+    # timings = run_comparisons(_path)
+    timings = run_worker_metric(_path)
+    # with open(_path,"r") as h:
+    #     timings = {ExtractionMethod(int(m)):v for m,v in json.load(h).items()}
+
+    print_best_run(timings)
+    print_avg_timings(timings)
+
