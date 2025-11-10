@@ -15,6 +15,7 @@ import gc
 import hashlib
 import json
 import logging
+import math
 import multiprocessing
 import os
 import threading
@@ -43,8 +44,6 @@ from relic.sga.core.definitions import OSFlags
 from relic.sga.core.native.definitions import (
     FileEntry,
     ExtractionStats,
-    ExtractionPlan,
-    ExtractionPlanCategory,
     WriteResult,
     ReadResult,
     ChecksumResult,
@@ -118,11 +117,21 @@ class _ExtractStrategy:
         self.stats: ExtractionStats = None  # type: ignore
         self.directories = cache
 
-        self.num_workers = config.num_workers or multiprocessing.cpu_count()
+        self.num_workers = min(
+            config.num_workers, 1
+        )  # Ensure we have at least one worker
         self.logger = config.logger or logging.getLogger(__name__)
-        self.enable_adaptive_threading = config.enable_adaptive_threading
-        self.enable_batching = config.enable_batching
+        if (
+            self.num_workers != config.num_workers
+        ):  # if statements isn't the same logic as `min(num_workers,1)`; fix maybe?
+            self.logger.warning(
+                f"# of workers ({config.num_workers}) invalid, defaulting to 1"
+            )
+
         self.chunk_size = config.chunk_size
+        self._should_disable_gc = config.disable_gc
+        self.batch_size = config.batch_size
+        self.native_handles = config.native_files
 
     def extract(
         self,
@@ -165,16 +174,26 @@ class _ExtractStrategy:
         created_dirs = 0
         for file in entries:
             dst_path = Path(output_dir) / file.path.lstrip("/")
-            if self.directories.ensure_directory(dst_path):
+            if self.directories.ensure_directory(dst_path.parent):
                 created_dirs += 1
 
         self.logger.info(f"Created {created_dirs} directories")
 
     def _create_batches(
-        self, entries: list[FileEntry], workers: int, batch_size: int
+        self, entries: list[FileEntry], batch_size: int
     ) -> List[List[FileEntry]]:
         self.logger.info(f"Extracting {len(entries)} files...")
-        self.logger.info(f"Using {workers} workers with batches of {batch_size}")
+
+        if not self.enable_batching:
+            self.logger.info("Batching not enabled - skipping batching...")
+            return [entries]
+        if batch_size <= 0:
+            self.logger.info(
+                f"Invalid batch size '{batch_size}' - skipping batching..."
+            )
+            return [entries]
+
+        self.logger.info(f"Creating batches of '{batch_size}'")
 
         # Create batches
         batches = []
@@ -191,11 +210,7 @@ class _ExtractStrategy:
         return batches
 
     def _extract_batch_isolated(
-        self,
-        sga_path: str,
-        output_dir: str,
-        batch: List[FileEntry],
-        dst_paths: List[str],
+        self, sga_path: str, output_dir: str, batch: List[FileEntry]
     ) -> List[BatchResult]:
         """Extract batch of files with single SGA handle using NATIVE Python file operations.
 
@@ -216,30 +231,40 @@ class _ExtractStrategy:
         try:
             # Open SGA once for entire batch
             with SgaReader(sga_path) as my_sga:
-                for entry, dst_path in zip(batch, dst_paths):
+                for entry in batch:
                     try:
                         # Get native destination path
-                        native_dst = Path(output_dir) / dst_path.lstrip("/")
+                        native_dst = Path(output_dir) / entry.path.lstrip("/")
 
-                        # Create parent directory (CACHED for speed!)
-                        self.directories.ensure_directory(native_dst.parent)
+                        # Ignore dir creation; should be handled before batching
+                        # # Create parent directory (CACHED for speed!)
+                        # self.directories.ensure_directory(native_dst.parent)
 
-                        # Extract with chunked reading (use NATIVE Python file for writing!)
-                        # For small files, use smaller chunks (64KB) for better responsiveness
-                        small_chunk = 64 * 1024  # 64KB - perfect for small files
-                        bytes_written = 0
-                        with my_sga.read_file(entry) as src_file:
-                            with open(
-                                native_dst, "wb", buffering=small_chunk
-                            ) as dst_file:
-                                while True:
-                                    chunk = src_file.read(small_chunk)
-                                    if not chunk:
-                                        break
-                                    dst_file.write(chunk)
-                                    bytes_written += len(chunk)
+                        # # Extract with chunked reading (use NATIVE Python file for writing!)
+                        # # For small files, use smaller chunks (64KB) for better responsiveness
+                        # small_chunk = max(
+                        #     64 * 1024,
+                        # )  # 64KB - perfect for small files
+                        if self.native_handles:
+                            with my_sga.read_file(entry) as src_file:
+                                with open(
+                                    native_dst, "wb", buffering=self.chunk_size
+                                ) as dst_file:
+                                    while True:
+                                        chunk = src_file.read(self.chunk_size)
+                                        if not chunk:
+                                            break
+                                        dst_file.write(chunk)
 
-                                dst_file.flush()
+                                    dst_file.flush()
+                        else:
+                            data = my_sga.read_buffer(entry)
+                            fd = os.open(
+                                native_dst,
+                                OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
+                            )
+                            os.write(fd, data)
+                            os.close(fd)
 
                         results.append(BatchResult(True, entry.path, None))
 
@@ -262,13 +287,11 @@ class _ExtractStrategy:
     ) -> list[Future[list[BatchResult]]]:
         futures = []
         for batch in batches:
-            dst_paths = [entry.path for entry in batch]
             future: Future[list[BatchResult]] = executor.submit(
                 self._extract_batch_isolated,
                 sga_path,
                 output_dir,
                 batch,
-                dst_paths,
             )
             futures.append(future)
         return futures
@@ -292,7 +315,7 @@ class _ExtractStrategy:
                     if self.stats.failed_files <= 10:  # Only show first 10 errors
                         self.logger.error(f"Failed: {result.path}: {result.error}")
 
-                if on_progress and total_processed % 500 == 0:
+                if on_progress:
                     on_progress(total_processed, self.stats.total_files)
 
         # Final progress callback
@@ -307,18 +330,26 @@ class _ExtractStrategy:
         self.logger.info(
             f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
         )
+        # Todo; allow timings in summary
+        # self.logger.info(f"  Time:       {t_extract:.2f}s")
+        # self.logger.info(
+        #     f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
+        # )
 
     @contextmanager
     def _disable_gc(self) -> Generator[None, Any, None]:
-        gc_was_enabled = gc.isenabled()
-        if gc_was_enabled:
-            gc.disable()
-            self.logger.info("Disabled GC for maximum speed")
-        yield
-        if gc_was_enabled:
-            gc.enable()
-            self.logger.info("Re-enabled GC")
-            gc.collect()
+        if self._should_disable_gc:
+            gc_was_enabled = gc.isenabled()
+            if gc_was_enabled:
+                gc.disable()
+                self.logger.info("Disabled GC for maximum speed")
+            yield
+            if gc_was_enabled:
+                gc.enable()
+                self.logger.info("Re-enabled GC")
+                gc.collect()
+        else:
+            yield
 
     @contextmanager
     def _timer(self) -> Generator[Callable[[], float], Any, None]:
@@ -353,31 +384,20 @@ class OptimizedStrategy(_ExtractStrategy):
         Returns:
             Extraction statistics
         """
-        # TODO; move out of optimized strategy, let parent handle
-        # # Use delta extraction if enabled (unless force_full or file_filter provided)
-        # if self.enable_delta and not force_full and file_filter is None:
-        #     return self.extract_delta(sga_path, output_dir, on_progress)
 
         self._start("OPTIMIZED", sga_path)
         # FAST MODE: Skip metadata collection, just get file paths!
         entries = self._collect(sga_path, file_filter)
-
         # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
         self._create_dirs(entries, output_dir)
-
-        # FAST MODE: Skip categorization, optimal batch size!
-        # Balance: Larger batches = fewer SGA opens, but less parallelism
-        # Sweet spot: 100-200 files per batch
-        batch_size = 150  # Optimized for 7815 files = ~52 batches = 52 SGA opens
-        workers = self.num_workers
-
         # Create batches
-        batches = self._create_batches(entries, workers, batch_size)
+        with self._disable_gc():
+            self.logger.info(f"Using {self.num_workers} workers")
+            batches = self._create_batches(entries, self.batch_size)
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = self._execute_batches(batches, executor, sga_path, output_dir)
-            self._parse_batch_results(futures, on_progress)
-
+            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+                futures = self._execute_batches(batches, executor, sga_path, output_dir)
+                self._parse_batch_results(futures, on_progress)
         # Summary
         self._print_summary()
 
@@ -412,19 +432,17 @@ class StreamingStrategy(_ExtractStrategy):
         with self._disable_gc():
             # MULTI-READER with thread-local handles!
             num_readers = min(
-                5, max(2, self.num_workers // 3)
+                5, max(1, self.num_workers // 3)
             )  # 5 readers for 15 workers
-            num_writers = self.num_workers - num_readers
+            num_writers = max(self.num_workers - num_readers, 1)
 
             self.logger.info(
                 f"Using {num_readers} readers (thread-local) + {num_writers} writers"
             )
 
             # Split files among readers
-            files_per_reader = len(entries) // num_readers
-            reader_file_lists = self._create_batches(
-                entries, num_readers, files_per_reader
-            )
+            files_per_reader = math.ceil(len(entries) / num_readers)
+            reader_file_lists = self._create_batches(entries, files_per_reader)
 
             # Shared deque with massive buffer
             buffer_size = min(len(entries), 10000)
@@ -582,12 +600,11 @@ class UltraFastStrategy(_ExtractStrategy):
 
         with self._disable_gc():
             # Use MANY parallel workers (each opens own SGA handle)
-            max_workers = min(self.num_workers * 2, 30)
-            batch_size = 50
-            file_batches = self._create_batches(files, max_workers, batch_size)
+            batch_size = self.batch_size
+            self.logger.info(f"Using {self.num_workers} workers")
+            file_batches = self._create_batches(files, batch_size)
 
             processed = 0
-            lock = threading.Lock()
 
             def process_batch(batch: list[FileEntry]) -> UltraFastBatchResult:
                 """Process batch with dedicated SGA handle."""
@@ -616,11 +633,11 @@ class UltraFastStrategy(_ExtractStrategy):
                             if local_result.failed <= 3:
                                 self.logger.error(f"Failed {file.path}: {e}")
 
-                return local_stats
+                return local_result
 
             # Process all batches in PARALLEL
             with self._timer() as timer:
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                     futures = [
                         executor.submit(process_batch, batch) for batch in file_batches
                     ]
@@ -656,7 +673,7 @@ class UltraFastStrategy(_ExtractStrategy):
         return self.stats
 
 
-class NativeUltraFastStrategy(_ExtractStrategy):
+class NativeStrategy(_ExtractStrategy):
     def extract(
         self,
         sga_path: str,
@@ -688,7 +705,9 @@ class NativeUltraFastStrategy(_ExtractStrategy):
                     f"Reading + decompressing {len(files)} files (parallel)..."
                 )
                 with SgaReader(sga_path) as reader:
-                    results = reader.read_files_parallel(files, num_workers=16)
+                    results = reader.read_files_parallel(
+                        files, num_workers=self.num_workers
+                    )
                 t_read = timer()
             self.logger.info(f"Read + decompressed in {t_read:.2f}s")
 
@@ -706,6 +725,7 @@ class NativeUltraFastStrategy(_ExtractStrategy):
                         return WriteResult(item.path, False, "Data was None")
                     try:
                         dst_path = Path(output_dir) / path.lstrip("/")
+                        self.directories.ensure_directory(dst_path.parent)
                         fd = os.open(
                             dst_path,
                             OSFlags.O_CREAT
@@ -777,12 +797,16 @@ class NativeUltraFastStrategy(_ExtractStrategy):
 
 @dataclass(slots=True)
 class UnpackerConfig:
-    num_workers: Optional[int] = None
+
+    num_workers: int
     logger: Optional[logging.Logger] = None
-    enable_adaptive_threading: bool = True
-    enable_batching: bool = True
-    # enable_delta: bool = False # moved to its own Strategy; explictly call extract with delta
+    # enable_adaptive_threading: bool = True # todo; bring back for grouping batches by category?
+    # enable_batching: bool = True # batching always enabled; use a non positive value (0 or any negative) to disable
+    # enable_delta: bool = False # moved to its own Strategy; explicitly call extract with delta
     chunk_size: int = 1024 * 1024
+    disable_gc: bool = True
+    batch_size: int = 128  # arbitrary value
+    native_files: bool = False
 
 
 class DirectoryCacher:
@@ -959,7 +983,7 @@ class DeltaStrategy(_ExtractStrategy):
         file_entries = NativeParserV2(sga_path).parse()
 
         self.logger.info(f"Calculating checksums for {len(file_entries)} files...")
-        num_workers = self.num_workers or 0
+        num_workers = self.num_workers or 1
         # Calculate checksums in parallel
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {
@@ -1153,7 +1177,7 @@ class AdvancedParallelUnpacker:
         _optimized = OptimizedStrategy(self._config, self._cache)
         _streaming = StreamingStrategy(self._config, self._cache)
         _ultrafast = UltraFastStrategy(self._config, self._cache)
-        _native = NativeUltraFastStrategy(self._config, self._cache)
+        _native = NativeStrategy(self._config, self._cache)
         _delta = DeltaStrategy(self._config, self._cache, _optimized)
         self._strategies = {
             ExtractionMethod.Optimized: _optimized,
@@ -1175,84 +1199,85 @@ class AdvancedParallelUnpacker:
         stats = extractor.extract(sga_path, output_dir, on_progress)
         return stats
 
-    def _get_optimal_workers(self, category: str, file_count: int) -> int:
-        """Calculate optimal worker count for file category.
-
-        Args:
-            category: File size category
-            file_count: Number of files in category
-
-        Returns:
-            Optimal number of workers
-        """
-        num_workers = self._config.num_workers or 0
-        if not self._config.enable_adaptive_threading:
-            return num_workers
-
-        # Tiny files: More workers (low CPU per file)
-        if category == "tiny":
-            return min(num_workers * 2, file_count)
-
-        # Small files: Standard workers
-        if category == "small":
-            return num_workers
-
-        # Medium files: Standard workers
-        if category == "medium":
-            return num_workers
-
-        # Large files: Fewer workers (high memory per file)
-        if category == "large":
-            return max(2, num_workers // 2)
-
-        # Huge files: Minimal workers (very high memory)
-        if category == "huge":
-            return max(1, num_workers // 4)
-
-        return num_workers
-
-    def get_extraction_plan(self, sga_path: str) -> ExtractionPlan:
-        """Analyze archive and return extraction plan.
-
-        Useful for estimating time/resources before extraction.
-
-        Args:
-            sga_path: Path to SGA archive
-
-        Returns:
-            Dictionary with extraction plan details
-        """
-        entries = NativeParserV2(sga_path).parse()
-
-        categories = _categorize_by_size(entries, logger=self._config.logger)  # type: ignore
-        num_workers = self._config.num_workers or 0
-        plan = ExtractionPlan(
-            total_files=len(entries),
-            total_bytes=sum(e.decompressed_size for e in entries),
-            categories={},
-            estimated_time_seconds=0,
-            recommended_workers=num_workers,
-        )
-
-        for cat, files in categories.items():
-            if not files:
-                continue
-
-            workers = self._get_optimal_workers(cat, len(files))
-            total_bytes = sum(f.decompressed_size for f in files)
-
-            plan.categories[cat] = ExtractionPlanCategory(
-                file_count=len(files),
-                total_bytes=total_bytes,
-                workers=workers,
-            )
-
-        # Estimate time (very rough)
-        # Assume ~50 MB/s extraction rate per worker
-        throughput_per_worker = 50 * 1024 * 1024  # 50 MB/s
-        effective_throughput = (
-            throughput_per_worker * num_workers * 0.7
-        )  # 70% efficiency
-        plan.estimated_time_seconds = plan.total_bytes / effective_throughput
-
-        return plan
+    #
+    # def _get_optimal_workers(self, category: str, file_count: int) -> int:
+    #     """Calculate optimal worker count for file category.
+    #
+    #     Args:
+    #         category: File size category
+    #         file_count: Number of files in category
+    #
+    #     Returns:
+    #         Optimal number of workers
+    #     """
+    #     num_workers = self._config.num_workers or 1
+    #     if not self._config.enable_adaptive_threading:
+    #         return num_workers
+    #
+    #     # Tiny files: More workers (low CPU per file)
+    #     if category == "tiny":
+    #         return min(num_workers * 2, file_count)
+    #
+    #     # Small files: Standard workers
+    #     if category == "small":
+    #         return num_workers
+    #
+    #     # Medium files: Standard workers
+    #     if category == "medium":
+    #         return num_workers
+    #
+    #     # Large files: Fewer workers (high memory per file)
+    #     if category == "large":
+    #         return max(2, num_workers // 2)
+    #
+    #     # Huge files: Minimal workers (very high memory)
+    #     if category == "huge":
+    #         return max(1, num_workers // 4)
+    #
+    #     return num_workers
+    #
+    # def get_extraction_plan(self, sga_path: str) -> ExtractionPlan:
+    #     """Analyze archive and return extraction plan.
+    #
+    #     Useful for estimating time/resources before extraction.
+    #
+    #     Args:
+    #         sga_path: Path to SGA archive
+    #
+    #     Returns:
+    #         Dictionary with extraction plan details
+    #     """
+    #     entries = NativeParserV2(sga_path).parse()
+    #
+    #     categories = _categorize_by_size(entries, logger=self._config.logger)  # type: ignore
+    #     num_workers = self._config.num_workers or 1
+    #     plan = ExtractionPlan(
+    #         total_files=len(entries),
+    #         total_bytes=sum(e.decompressed_size for e in entries),
+    #         categories={},
+    #         estimated_time_seconds=0,
+    #         recommended_workers=num_workers,
+    #     )
+    #
+    #     for cat, files in categories.items():
+    #         if not files:
+    #             continue
+    #
+    #         workers = self._get_optimal_workers(cat, len(files))
+    #         total_bytes = sum(f.decompressed_size for f in files)
+    #
+    #         plan.categories[cat] = ExtractionPlanCategory(
+    #             file_count=len(files),
+    #             total_bytes=total_bytes,
+    #             workers=workers,
+    #         )
+    #
+    #     # Estimate time (very rough)
+    #     # Assume ~50 MB/s extraction rate per worker
+    #     throughput_per_worker = 50 * 1024 * 1024  # 50 MB/s
+    #     effective_throughput = (
+    #         throughput_per_worker * num_workers * 0.7
+    #     )  # 70% efficiency
+    #     plan.estimated_time_seconds = plan.total_bytes / effective_throughput
+    #
+    #     return plan
