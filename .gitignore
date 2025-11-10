@@ -33,3 +33,4 @@ test/
 examples/*_output/
 examples/ultra_fast_extraction_demo.py
 *.prof
+/tests/profiling/prof

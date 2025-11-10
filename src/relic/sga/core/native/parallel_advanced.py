@@ -16,7 +16,6 @@ import hashlib
 import json
 import logging
 import math
-import multiprocessing
 import os
 import threading
 from collections import deque
@@ -184,10 +183,10 @@ class _ExtractStrategy:
     ) -> List[List[FileEntry]]:
         self.logger.info(f"Extracting {len(entries)} files...")
 
-        if not self.enable_batching:
+        if batch_size == 0:
             self.logger.info("Batching not enabled - skipping batching...")
             return [entries]
-        if batch_size <= 0:
+        if batch_size < 0:
             self.logger.info(
                 f"Invalid batch size '{batch_size}' - skipping batching..."
             )
@@ -600,9 +599,8 @@ class UltraFastStrategy(_ExtractStrategy):
 
         with self._disable_gc():
             # Use MANY parallel workers (each opens own SGA handle)
-            batch_size = self.batch_size
             self.logger.info(f"Using {self.num_workers} workers")
-            file_batches = self._create_batches(files, batch_size)
+            file_batches = self._create_batches(files, self.batch_size)
 
             processed = 0
 
@@ -1141,6 +1139,73 @@ class DeltaStrategy(_ExtractStrategy):
 
         return stats
 
+class SerialStrategy(_ExtractStrategy):
+    def extract(
+        self,
+        sga_path: str,
+        output_dir: str,
+        on_progress: Optional[ProgressCallback] = None,
+        **kwargs: Any,
+    ) -> ExtractionStats:
+        """ULTRA-FAST extraction with parallel decompression.
+
+        Same as extract_streaming but with:
+        - Multiple concurrent readers (each with own SGA handle)
+        - Parallel decompression
+        - Target: 3-5 seconds (vs 12s)
+        """
+
+        self._start("ULTRA-FAST", sga_path)
+
+        # Get file list
+        files = self._collect(sga_path)
+        self._create_dirs(files, output_dir)
+
+        self.stats.total_files = len(files)
+
+        with self._disable_gc():
+            with SgaReader(sga_path) as sga:
+                with self._timer() as timer:
+                    for processed, file in enumerate(files):
+                        try:
+                            # Read and decompress (fs handles this)
+                            data = sga.read_buffer(file)
+
+                            # Write to disk
+                            dst_path = Path(output_dir) / file.path.lstrip("/")
+                            fd = os.open(
+                                dst_path,
+                                OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
+                            )
+                            os.write(fd, data)
+                            os.close(fd)
+                            self.stats.extracted_files += 1
+                            self.stats.extracted_bytes += len(data)
+
+                        except Exception as e:
+                            self.stats.failed_files += 1
+                            if self.stats.failed_files <= 3:
+                                self.logger.error(f"Failed {file.path}: {e}")
+
+                            # if on_progress and processed[0] % 500 == 0: # TODO fix the mod operation
+                            if on_progress and processed % 50 == 0:
+                                on_progress(processed, self.stats.total_files)
+
+
+                t_extract = timer()
+
+            # Final progress
+            if on_progress:
+                on_progress(processed, self.stats.total_files)
+
+        # Summary
+        self._print_summary()
+        self.logger.info(f"  Time:       {t_extract:.2f}s")
+        self.logger.info(
+            f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
+        )
+        return self.stats
+
 
 class ExtractionMethod(IntEnum):
     """
@@ -1150,6 +1215,7 @@ class ExtractionMethod(IntEnum):
     Generally; use UltraFast or Native for best performance.
     """
 
+    Serial = 5
     UltraFast = 0
     Optimized = 1
     Streaming = 2
@@ -1179,12 +1245,14 @@ class AdvancedParallelUnpacker:
         _ultrafast = UltraFastStrategy(self._config, self._cache)
         _native = NativeStrategy(self._config, self._cache)
         _delta = DeltaStrategy(self._config, self._cache, _optimized)
+        _serial = SerialStrategy(self._config, self._cache)
         self._strategies = {
             ExtractionMethod.Optimized: _optimized,
             ExtractionMethod.Streaming: _streaming,
             ExtractionMethod.UltraFast: _ultrafast,
             ExtractionMethod.Native: _native,
             ExtractionMethod.Delta: _delta,
+            ExtractionMethod.Serial:_serial,
         }
         self._default_extractor = _ultrafast
 
