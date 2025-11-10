@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import json
 import logging
@@ -16,9 +17,10 @@ from relic.sga.core.native.parallel_advanced import (
 )
 
 logger = logging.getLogger()
-logger.setLevel(logging.ERROR)
+loglevel = logging.INFO
+logger.setLevel(loglevel)
 handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.ERROR)
+handler.setLevel(loglevel)
 logger.addHandler(handler)
 
 
@@ -139,10 +141,48 @@ def print_best_run(timings: dict[ExtractionMethod, list[float]]):
         print(f"\tBest [{best_method.name}]: {best:.3f}\n\tWorst [{worst_method.name}]: {worst:.3f}" )
         print()
 
+def run_serial_optimized_comp(path:str):
+    cfg = UnpackerConfig(
+        num_workers=1,
+        logger=logger,
+        disable_gc=True,
+        native_files=False,
+    )
+    unpacker = AdvancedParallelUnpacker(cfg)
+    _METHODS = [ExtractionMethod.Serial, ExtractionMethod.Optimized]
+    _RUNS = 1 # len(run_workers)
+    for method in _METHODS:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tot_ts = []
+            tot_timings = {method:tot_ts}
+            stat_ts = []
+            stat_timings = {method:stat_ts}
+            for run in range(_RUNS):
+                print(f"Extracting <{method.name}> - run {run+1/_RUNS}")
+                # run is used to get an average; not to test workers
+                with _timer() as timer:
+                    stats = unpacker.extract(path,tmpdir,method=method)
+                    time = timer()
+                    tot_ts.append(timer())
+                    stat_ts.append(stats.timings)
+                print(f"'{method.name}' [{run}]: {time:.3f}")
+
+        print(f"{method.name} (Total Average): {sum(tot_ts)/(len(tot_ts) or 1):.3f}")
+        print(f"{method.name} (Stat Average): {sum([s.total_time for s in stat_ts])/(len(tot_ts) or 1):.3f}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        p = Path("./prof/") / (datetime.datetime.now().isoformat().replace(":", "_") + ".json")
+        p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with p.open("w") as h:
+            json.dump(tot_timings, h, indent=4)
+    except Exception as e:
+        traceback.print_exception(e)
+
 
 if __name__ == "__main__":
-    path = sys.argv[1]
+    _path = sys.argv[1]
     # with open(r"C:\Users\moder\OneDrive\Documents\GitHub\SGA-Core\tests\profiling\prof\2025-11-10T00_30_35.894504.json", "r") as f:
     #     _timings = {ExtractionMethod(int(k)):v for k, v in json.load(f).items()}
-    run_serial(path)
+    run_serial_optimized_comp(_path)
     # print_best_run(timings)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from relic.sga.core.definitions import StorageType
 
@@ -17,6 +17,20 @@ class FileEntry:
     storage_type: StorageType
     modified: datetime.datetime | None = None
 
+@dataclass(slots=True)
+class ExtractionTimings:
+    parsing_sga:float = 0
+    filtering_files:float = 0
+    creating_dirs:float = 0
+    creating_batches:float = 0
+    executing_batches:float = 0
+    # parsing_results:float = 0
+    @property
+    def total_time(self):
+        return sum([self.parsing_sga,self.filtering_files,self.creating_dirs,self.creating_batches,self.executing_batches])
+
+
+
 
 @dataclass(slots=True)  # Use __slots__ for 50% memory reduction!
 class ExtractionStats:
@@ -28,6 +42,7 @@ class ExtractionStats:
     total_bytes: int = 0
     extracted_bytes: int = 0
     skipped_files: int = 0
+    timings:ExtractionTimings = field(default_factory=lambda : ExtractionTimings())
 
 
 @dataclass(slots=True)

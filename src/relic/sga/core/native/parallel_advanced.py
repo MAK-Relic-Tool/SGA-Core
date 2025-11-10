@@ -52,61 +52,6 @@ from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
 
 
-class FileCategory(StrEnum):
-    Tiny = "tiny"
-    Small = "small"
-    Medium = "medium"
-    Large = "large"
-    Huge = "huge"
-
-
-def _categorize_by_size(
-    entries: List[FileEntry], logger: logging.Logger
-) -> Dict[str, List[FileEntry]]:
-    """Categorize files by size for optimal scheduling.
-
-    Args:
-        entries: List of file entries
-
-    Returns:
-        Dictionary mapping category to file list
-    """
-    SIZE_TINY = 10 * 1024  # 10KB
-    SIZE_SMALL = 1024 * 1024  # 1MB
-    SIZE_MEDIUM = 10 * 1024 * 1024  # 10MB
-    SIZE_LARGE = 100 * 1024 * 1024  # 100MB
-
-    categories: dict[str, list[FileEntry]] = {
-        "tiny": [],  # < 10KB
-        "small": [],  # 10KB - 1MB
-        "medium": [],  # 1MB - 10MB
-        "large": [],  # 10MB - 100MB
-        "huge": [],  # > 100MB
-    }
-
-    for entry in entries:
-        if entry.decompressed_size < SIZE_TINY:
-            categories["tiny"].append(entry)
-        elif entry.decompressed_size < SIZE_SMALL:
-            categories["small"].append(entry)
-        elif entry.decompressed_size < SIZE_MEDIUM:
-            categories["medium"].append(entry)
-        elif entry.decompressed_size < SIZE_LARGE:
-            categories["large"].append(entry)
-        else:
-            categories["huge"].append(entry)
-
-    # Log distribution
-    logger.info("File size distribution:")
-    for cat, files in categories.items():
-        if files:
-            total_size = sum(f.decompressed_size for f in files)
-            logger.info(
-                f"  {cat:8s}: {len(files):6d} files ({total_size / 1024 / 1024:.1f} MB)"
-            )
-
-    return categories
-
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 
@@ -155,12 +100,16 @@ class _ExtractStrategy:
         self, sga_path: str, file_filter: Optional[Sequence[str]] = None
     ) -> list[FileEntry]:
         self.logger.info("Collecting file paths...")
-        entries = NativeParserV2(sga_path, self.logger).parse()
+        with self._timer() as timer:
+            entries = NativeParserV2(sga_path, self.logger).parse()
+            self.stats.timings.parsing_sga = timer()
 
         # Apply filter if provided (DELTA MODE!)
         if file_filter is not None:
-            file_filter_set = set(file_filter)
-            entries = [p for p in entries if p.path in file_filter_set]
+            with self._timer() as timer:
+                file_filter_set = set(file_filter)
+                entries = [p for p in entries if p.path in file_filter_set]
+                self.stats.timings.filtering_files = timer()
             self.logger.info(f"Filtered to {len(entries)} changed files")
 
         self.stats.total_files = len(entries)
@@ -169,20 +118,21 @@ class _ExtractStrategy:
 
     def _create_dirs(self, entries: list[FileEntry], output_dir: str) -> None:
         self.logger.info("Pre-creating directory structure...")
+        with self._timer() as timer:
 
-        created_dirs = 0
-        for file in entries:
-            dst_path = Path(output_dir) / file.path.lstrip("/")
-            if self.directories.ensure_directory(dst_path.parent):
-                created_dirs += 1
-
+            created_dirs = 0
+            for file in entries:
+                dst_path = Path(output_dir) / file.path.lstrip("/")
+                if self.directories.ensure_directory(dst_path.parent):
+                    created_dirs += 1
+            self.stats.timings.creating_dirs = timer()
         self.logger.info(f"Created {created_dirs} directories")
 
     def _create_batches(
         self, entries: list[FileEntry], batch_size: int
     ) -> List[List[FileEntry]]:
         self.logger.info(f"Extracting {len(entries)} files...")
-
+        # Dont bother with stats if batching is skipped
         if batch_size == 0:
             self.logger.info("Batching not enabled - skipping batching...")
             return [entries]
@@ -196,15 +146,15 @@ class _ExtractStrategy:
 
         # Create batches
         batches = []
+        with self._timer() as timer:
+            batch_count, remaining = divmod(len(entries), batch_size)
 
-        batch_count, remaining = divmod(len(entries), batch_size)
-
-        for i in range(batch_count):
-            batches.append(entries[i * batch_size : (i + 1) * batch_size])
-        if remaining > 0:
-            offset = batch_count * batch_size
-            batches.append(entries[offset : offset + remaining])
-
+            for i in range(batch_count):
+                batches.append(entries[i * batch_size : (i + 1) * batch_size])
+            if remaining > 0:
+                offset = batch_count * batch_size
+                batches.append(entries[offset : offset + remaining])
+            self.stats.timings.creating_batches = timer()
         self.logger.info(f"Created {len(batches)} batches")
         return batches
 
@@ -300,26 +250,28 @@ class _ExtractStrategy:
         futures: list[Future[list[BatchResult]]],
         on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        total_processed = 0
-        for future in as_completed(futures):
-            results = future.result()
+        with self._timer() as timer:
+            total_processed = 0
+            for future in as_completed(futures):
+                results = future.result()
 
-            for result in results:
-                if result.success:
-                    self.stats.extracted_files += 1
-                    total_processed += 1
-                else:
-                    self.stats.failed_files += 1
-                    total_processed += 1
-                    if self.stats.failed_files <= 10:  # Only show first 10 errors
-                        self.logger.error(f"Failed: {result.path}: {result.error}")
+                for result in results:
+                    if result.success:
+                        self.stats.extracted_files += 1
+                        total_processed += 1
+                    else:
+                        self.stats.failed_files += 1
+                        total_processed += 1
+                        if self.stats.failed_files <= 10:  # Only show first 10 errors
+                            self.logger.error(f"Failed: {result.path}: {result.error}")
 
-                if on_progress:
-                    on_progress(total_processed, self.stats.total_files)
+                    if on_progress:
+                        on_progress(total_processed, self.stats.total_files)
 
-        # Final progress callback
-        if on_progress:
-            on_progress(total_processed, self.stats.total_files)
+            # Final progress callback
+            if on_progress:
+                on_progress(total_processed, self.stats.total_files)
+            self.stats.timings.executing_batches = timer()
 
     def _print_summary(self) -> None:
         self.logger.info("Extraction complete!")
@@ -329,7 +281,15 @@ class _ExtractStrategy:
         self.logger.info(
             f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
         )
-        # Todo; allow timings in summary
+        self.logger.info("Timings")
+        self.logger.info(f"  Parsing SGA:          {self.stats.timings.parsing_sga:.4f}")
+        self.logger.info(f"  Filtering SGA:        {self.stats.timings.filtering_files:.4f}")
+        self.logger.info(f"  Creating directories: {self.stats.timings.creating_dirs:.4f}")
+        self.logger.info(f"  Creating Batches:     {self.stats.timings.creating_batches:.4f}")
+        self.logger.info(f"  Running Batches:      {self.stats.timings.creating_batches:.4f}")
+        self.logger.info(f"  Total Time:           {self.stats.timings.total_time:.4f}")
+
+        # Todo; allow timings in summary1
         # self.logger.info(f"  Time:       {t_extract:.2f}s")
         # self.logger.info(
         #     f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
@@ -341,11 +301,11 @@ class _ExtractStrategy:
             gc_was_enabled = gc.isenabled()
             if gc_was_enabled:
                 gc.disable()
-                self.logger.info("Disabled GC for maximum speed")
+                self.logger.debug("Disabled GC")
             yield
             if gc_was_enabled:
                 gc.enable()
-                self.logger.info("Re-enabled GC")
+                self.logger.debug("Re-enabled GC")
                 gc.collect()
         else:
             yield
@@ -1155,14 +1115,13 @@ class SerialStrategy(_ExtractStrategy):
         - Target: 3-5 seconds (vs 12s)
         """
 
-        self._start("ULTRA-FAST", sga_path)
+        self._start("Serial", sga_path)
 
         # Get file list
         files = self._collect(sga_path)
         self._create_dirs(files, output_dir)
 
         self.stats.total_files = len(files)
-
         with self._disable_gc():
             with SgaReader(sga_path) as sga:
                 with self._timer() as timer:
@@ -1192,7 +1151,7 @@ class SerialStrategy(_ExtractStrategy):
                                 on_progress(processed, self.stats.total_files)
 
 
-                t_extract = timer()
+                    self.stats.timings.executing_batches = timer()
 
             # Final progress
             if on_progress:
@@ -1200,10 +1159,10 @@ class SerialStrategy(_ExtractStrategy):
 
         # Summary
         self._print_summary()
-        self.logger.info(f"  Time:       {t_extract:.2f}s")
-        self.logger.info(
-            f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
-        )
+        # self.logger.info(f"  Time:       {t_extract:.2f}s")
+        # self.logger.info(
+        #     f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
+        # )
         return self.stats
 
 

@@ -55,7 +55,7 @@ class NativeParserV2:
     def _log(self, msg: str) -> None:  # TODO; use logger directly and use BraceMessages
         """Log if verbose."""
         if self.logger:
-            self.logger.info(f"[Parser] {msg}")
+            self.logger.debug(f"[Parser] {msg}")
 
     @staticmethod
     def _parse_toc_pair(f: BinaryIO) -> TocPointer:
