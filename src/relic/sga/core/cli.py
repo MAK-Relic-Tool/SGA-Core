@@ -8,7 +8,7 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 from json import JSONEncoder
 from logging import Logger
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Sequence
 from fs import open_fs
 from fs.base import FS
 from fs.copy import copy_fs
@@ -95,12 +95,12 @@ class RelicSgaUnpackCli(CliPlugin):
         sga_legacy_flags = parser.add_mutually_exclusive_group()
         sga_legacy_flags.add_argument(
             "--legacy",
-            help="Use fs-based extraction (slower, does not support workers).",
+            help="Use fs-based extraction instead of native/parallelized extraction",
             action="store_true",
         )
         sga_legacy_flags.add_argument(
             "--nolegacy",
-            help="Do not fallback to legacy extraction",
+            help="Do not fallback to legacy extraction if native/parallelized extraction fails",
             action="store_true",
         )
         parser.add_argument(
@@ -134,6 +134,9 @@ class RelicSgaUnpackCli(CliPlugin):
 
         logger.info(f"Unpacking `{infile}`")
 
+        def use_merge_mode(drive_count: int) -> bool:
+            return merge or (not isolate and drive_count == 1)
+
         # Use Fast native extraction by default
         if not use_legacy:
             try:
@@ -144,7 +147,15 @@ class RelicSgaUnpackCli(CliPlugin):
 
                 logger.info(f"Using Fast native extraction ({num_workers} workers)")
                 unpacker = AdvancedParallelUnpacker(
-                    UnpackerConfig(num_workers=num_workers, logger=logger)
+                    UnpackerConfig(
+                        num_workers=num_workers,
+                        logger=logger,
+                        disable_gc=True,
+                        native_files=False,
+                        precache_dirs=True,
+                        verbose=True,
+                        should_merge=use_merge_mode,
+                    )
                 )
 
                 # Progress callback
@@ -169,14 +180,14 @@ class RelicSgaUnpackCli(CliPlugin):
                 logger.warning(f"Fast extraction failed:")
                 logger.exception(e)
                 if use_legacy:
-                    logger.info("Falling back to compatible mode...")
+                    logger.info("Falling back to legacy mode...")
                 else:
                     return _FAIL
                 use_legacy = should_fallback
 
         # Fallback to compatible fs-based extraction
         if use_legacy:
-            logger.info("Using compatible fs-based extraction")
+            logger.info("Using fs-based (legacy) extraction")
 
             def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
                 logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
@@ -185,8 +196,9 @@ class RelicSgaUnpackCli(CliPlugin):
             sga: EssenceFS
             with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
                 roots = list(sga.iterate_fs())
+
                 # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
-                if merge or (not isolate and len(roots) == 1):
+                if use_merge_mode(len(roots)):
                     copy_fs(
                         sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True
                     )

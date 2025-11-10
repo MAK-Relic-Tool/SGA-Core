@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import struct
 from dataclasses import dataclass
-from typing import Dict, BinaryIO, Any
+from typing import Dict, BinaryIO, Any, Callable
 
 from relic.sga.core.definitions import StorageType, Version, MAGIC_WORD
 from relic.sga.core.errors import VersionNotSupportedError
@@ -37,7 +37,12 @@ class NativeParserV2:
     Target: 3-4 seconds for 7,815 files!
     """
 
-    def __init__(self, sga_path: str, logger: logging.Logger | None = None):
+    def __init__(
+        self,
+        sga_path: str,
+        logger: logging.Logger | None = None,
+        should_merge: bool | Callable[[int], bool] = False,
+    ):
         """Parse SGA file.
 
         Args:
@@ -48,7 +53,7 @@ class NativeParserV2:
         self.logger = logger
         self._files: Dict[str, FileEntry] = {}
         self._data_block_start = 0
-
+        self._should_merge = should_merge
         # Parse the binary format
         self._parsed = False
 
@@ -229,6 +234,10 @@ class NativeParserV2:
             # Format: drive_pos(4), drive_count(2), folder_pos(4), folder_count(2),
             #         file_pos(4), file_count(2), name_pos(4), name_count(2)
             toc_ptrs = self._parse_toc(f)
+            if isinstance(self._should_merge, bool):
+                merging = self._should_merge
+            else:
+                merging = self._should_merge(toc_ptrs.drive.count)
 
             self._log(
                 f"TOC: {toc_ptrs.drive.count} drives, {toc_ptrs.folder.count} folders,"
@@ -246,7 +255,7 @@ class NativeParserV2:
             for drive in drives:
                 drive_name = drive["name"]
                 self._build_file_paths(
-                    folders, files, drive["root_folder"], drive_name, ""
+                    folders, files, drive["root_folder"], drive_name, "", merging
                 )
 
             self._log(f"Successfully parsed {len(self._files)} files!")
@@ -258,6 +267,7 @@ class NativeParserV2:
         folder_idx: int,
         drive_name: str,
         current_path: str,
+        exclude_drive: bool = False,
     ) -> None:
         """Recursively build full file paths."""
         if folder_idx >= len(folders):
@@ -279,10 +289,16 @@ class NativeParserV2:
                 file = files[file_idx]
 
                 # Build full path
-                if full_folder_path:
-                    full_path = f"{drive_name}/{full_folder_path}/{file['name']}"
+                if exclude_drive:
+                    if full_folder_path:
+                        full_path = f"{full_folder_path}/{file['name']}"
+                    else:
+                        full_path = file["name"]
                 else:
-                    full_path = f"{drive_name}/{file['name']}"
+                    if full_folder_path:
+                        full_path = f"{drive_name}/{full_folder_path}/{file['name']}"
+                    else:
+                        full_path = f"{drive_name}/{file['name']}"
 
                 # Create entry - data_offset is RELATIVE to data block!
                 # Absolute offset = data_block_start + data_offset
@@ -306,7 +322,6 @@ class NativeParserV2:
     def parse(self) -> list[FileEntry]:
         if not self._parsed:
             self._parse_sga_binary()
-
         return self.get_file_entries()
 
     def get_file_entries(self) -> list[FileEntry]:

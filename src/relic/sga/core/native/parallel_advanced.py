@@ -35,6 +35,7 @@ from typing import (
     Generator,
     Sequence,
     TypeAlias,
+    no_type_check,
 )
 
 from relic.core.logmsg import BraceMessage
@@ -52,15 +53,17 @@ from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
 
 
-
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 
-class FakeLogger(object):
 
-    def __getattr__(self, name):
-        def faker(*args, **kwargs):
+# @no_type_check
+class FakeLogger(object):
+    def __getattr__(self, name: Any) -> Any:
+        def faker(*args: Any, **kwargs: Any) -> Any:
             return self
+
         return faker
+
 
 class _ExtractStrategy:
     def __init__(self, config: UnpackerConfig, cache: DirectoryCacher):
@@ -68,7 +71,7 @@ class _ExtractStrategy:
         self.directories = cache
 
         self.logger = config.logger or logging.getLogger(__name__)
-        self.verbose_logger = config.logger if config.verbose else FakeLogger()
+        self.verbose_logger = self.logger if config.verbose else FakeLogger()
         self._precreate_dirs = config.precache_dirs
         self.num_workers = config.num_workers
         if self.num_workers <= 0:
@@ -77,7 +80,7 @@ class _ExtractStrategy:
             )
             self.num_workers = 1
 
-
+        self.should_merge = config.should_merge
         self.chunk_size = config.chunk_size
         self._should_disable_gc = config.disable_gc
         self.batch_size = config.batch_size
@@ -107,7 +110,7 @@ class _ExtractStrategy:
     ) -> list[FileEntry]:
         self.verbose_logger.info("Collecting file paths...")
         with self._timer() as timer:
-            entries = NativeParserV2(sga_path, self.logger).parse()
+            entries = NativeParserV2(sga_path, self.logger, self.should_merge).parse()
             self.stats.timings.parsing_sga = timer()
 
         # Apply filter if provided (DELTA MODE!)
@@ -122,7 +125,9 @@ class _ExtractStrategy:
         self.verbose_logger.info(f"Found {len(entries)} files")
         return entries
 
-    def _create_dirs(self, entries: list[FileEntry], output_dir: str, force:bool=False) -> None:
+    def _create_dirs(
+        self, entries: list[FileEntry], output_dir: str, force: bool = False
+    ) -> None:
         if not force and not self._precreate_dirs:
             return
         self.verbose_logger.info("Pre-creating directory structure...")
@@ -184,7 +189,7 @@ class _ExtractStrategy:
         """
         results: List[BatchResult] = []
 
-        last_entry_completed = -1 # sentinel; -1 signifies no files completed
+        last_entry_completed = -1  # sentinel; -1 signifies no files completed
         try:
             # Open SGA once for entire batch
             with SgaReader(sga_path) as my_sga:
@@ -292,18 +297,29 @@ class _ExtractStrategy:
             f"  Extracted:  {self.stats.extracted_bytes / 1024 / 1024:.1f} MB"
         )
         self.logger.info("Timings")
-        self.logger.info(f"  Parsing SGA:          {self.stats.timings.parsing_sga:.4f}")
+        self.logger.info(
+            f"  Parsing SGA:          {self.stats.timings.parsing_sga:.4f}"
+        )
         if self.stats.timings.filtering_files > 0:
-            self.logger.info(f"  Filtering SGA:        {self.stats.timings.filtering_files:.4f}")
+            self.logger.info(
+                f"  Filtering SGA:        {self.stats.timings.filtering_files:.4f}"
+            )
         if self.stats.timings.creating_dirs > 0:
-            self.logger.info(f"  Creating directories: {self.stats.timings.creating_dirs:.4f}")
+            self.logger.info(
+                f"  Creating directories: {self.stats.timings.creating_dirs:.4f}"
+            )
         if self.stats.timings.creating_batches > 0:
-            self.logger.info(f"  Creating Batches:     {self.stats.timings.creating_batches:.4f}")
-        self.logger.info(f"  Running Batches:      {self.stats.timings.executing_batches:.4f}")
+            self.logger.info(
+                f"  Creating Batches:     {self.stats.timings.creating_batches:.4f}"
+            )
+        self.logger.info(
+            f"  Running Batches:      {self.stats.timings.executing_batches:.4f}"
+        )
         if self.stats.timings.parsing_results > 0:
-            self.logger.info(f"  Parsing Results:      {self.stats.timings.parsing_results:.4f}")
+            self.logger.info(
+                f"  Parsing Results:      {self.stats.timings.parsing_results:.4f}"
+            )
         self.logger.info(f"  Total Time:           {self.stats.timings.total_time:.4f}")
-
 
     @contextmanager
     def _disable_gc(self) -> Generator[None, Any, None]:
@@ -537,10 +553,6 @@ class StreamingStrategy(_ExtractStrategy):
         return self.stats
 
 
-
-
-
-
 class NativeStrategy(_ExtractStrategy):
     def extract(
         self,
@@ -572,7 +584,9 @@ class NativeStrategy(_ExtractStrategy):
                         files, num_workers=self.num_workers
                     )
                 self.stats.timings.creating_batches = timer()
-            self.verbose_logger.info(f"Read + decompressed in {self.stats.timings.creating_batches:.2f}s")
+            self.verbose_logger.info(
+                f"Read + decompressed in {self.stats.timings.creating_batches:.2f}s"
+            )
 
             self.verbose_logger.info("Writing files to disk (parallel)...")
 
@@ -612,7 +626,6 @@ class NativeStrategy(_ExtractStrategy):
                     )
                 self.stats.timings.executing_batches = timer()
 
-
             # Count results
             with self._timer() as timer:
                 for write_result in write_results:
@@ -637,7 +650,6 @@ class NativeStrategy(_ExtractStrategy):
         # Summary
         self._print_summary()
 
-
         return self.stats
 
 
@@ -653,8 +665,9 @@ class UnpackerConfig:
     disable_gc: bool = True
     batch_size: int = 128  # arbitrary value
     native_files: bool = False
-    precache_dirs:bool = True
+    precache_dirs: bool = True
     verbose: bool = False
+    should_merge: bool | Callable[[int], bool] = False
 
 
 class DirectoryCacher:
@@ -830,7 +843,9 @@ class DeltaStrategy(_ExtractStrategy):
         manifest = {}
 
         # Collect all file paths first
-        file_entries = NativeParserV2(sga_path).parse()
+        file_entries = NativeParserV2(
+            sga_path, self.logger, should_merge=self.should_merge
+        ).parse()
 
         self.logger.info(f"Calculating checksums for {len(file_entries)} files...")
         num_workers = self.num_workers or 1
@@ -991,6 +1006,7 @@ class DeltaStrategy(_ExtractStrategy):
 
         return stats
 
+
 class SerialStrategy(_ExtractStrategy):
     def extract(
         self,
@@ -1024,7 +1040,9 @@ class SerialStrategy(_ExtractStrategy):
                             else:
                                 fd = os.open(
                                     dst_path,
-                                    OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
+                                    OSFlags.O_CREAT
+                                    | OSFlags.O_WRONLY
+                                    | OSFlags.O_BINARY,
                                 )
                                 os.write(fd, data)
                                 os.close(fd)
@@ -1039,7 +1057,6 @@ class SerialStrategy(_ExtractStrategy):
                             # if on_progress and processed[0] % 500 == 0: # TODO fix the mod operation
                             if on_progress and processed % 50 == 0:
                                 on_progress(processed, self.stats.total_files)
-
 
                     self.stats.timings.executing_batches = timer()
 
@@ -1065,7 +1082,7 @@ class ExtractionMethod(IntEnum):
     """
 
     Serial = 5
-    UltraFast = 0 # Rolled into optimized via config parameters
+    UltraFast = 0  # Rolled into optimized via config parameters
     Optimized = 1
     Streaming = 2
     Native = 3
@@ -1097,10 +1114,10 @@ class AdvancedParallelUnpacker:
         self._strategies = {
             ExtractionMethod.Optimized: _optimized,
             ExtractionMethod.Streaming: _streaming,
-            ExtractionMethod.UltraFast: _optimized, # use optimized; same thing
+            ExtractionMethod.UltraFast: _optimized,  # use optimized; same thing
             ExtractionMethod.Native: _native,
             ExtractionMethod.Delta: _delta,
-            ExtractionMethod.Serial:_serial,
+            ExtractionMethod.Serial: _serial,
         }
         self._default_extractor = _native
 
