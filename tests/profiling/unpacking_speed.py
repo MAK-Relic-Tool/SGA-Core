@@ -49,7 +49,7 @@ run_workers = sorted(
 
 def run_serial(path:str):
     cfg = UnpackerConfig(
-        num_workers=1,
+        num_workers=multiprocessing.cpu_count(),
         logger=logger,
         disable_gc=True,
         native_files=False,
@@ -143,14 +143,16 @@ def print_best_run(timings: dict[ExtractionMethod, list[float]]):
 
 def run_serial_optimized_comp(path:str):
     cfg = UnpackerConfig(
-        num_workers=1,
+        num_workers=multiprocessing.cpu_count(),
         logger=logger,
         disable_gc=True,
         native_files=False,
+        verbose=False,
+        precreate_dirs=True
     )
     unpacker = AdvancedParallelUnpacker(cfg)
     _METHODS = [ExtractionMethod.Serial, ExtractionMethod.Optimized]
-    _RUNS = 1 # len(run_workers)
+    _RUNS = 3 # len(run_workers)
     for method in _METHODS:
         with tempfile.TemporaryDirectory() as tmpdir:
             tot_ts = []
@@ -158,7 +160,7 @@ def run_serial_optimized_comp(path:str):
             stat_ts = []
             stat_timings = {method:stat_ts}
             for run in range(_RUNS):
-                print(f"Extracting <{method.name}> - run {run+1/_RUNS}")
+                print(f"Extracting <{method.name}> - run {run+1}/{_RUNS}")
                 # run is used to get an average; not to test workers
                 with _timer() as timer:
                     stats = unpacker.extract(path,tmpdir,method=method)

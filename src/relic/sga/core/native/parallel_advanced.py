@@ -55,22 +55,28 @@ from relic.sga.core.native.v2 import NativeParserV2
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 
+class FakeLogger(object):
+
+    def __getattr__(self, name):
+        def faker(*args, **kwargs):
+            return self
+        return faker
 
 class _ExtractStrategy:
     def __init__(self, config: UnpackerConfig, cache: DirectoryCacher):
         self.stats: ExtractionStats = None  # type: ignore
         self.directories = cache
 
-        self.num_workers = min(
-            config.num_workers, 1
-        )  # Ensure we have at least one worker
         self.logger = config.logger or logging.getLogger(__name__)
-        if (
-            self.num_workers != config.num_workers
-        ):  # if statements isn't the same logic as `min(num_workers,1)`; fix maybe?
-            self.logger.warning(
+        self.verbose_logger = config.logger if config.verbose else FakeLogger()
+        self._precreate_dirs = config.precreate_dirs
+        self.num_workers = config.num_workers
+        if self.num_workers <= 0:
+            self.logger.error(
                 f"# of workers ({config.num_workers}) invalid, defaulting to 1"
             )
+            self.num_workers = 1
+
 
         self.chunk_size = config.chunk_size
         self._should_disable_gc = config.disable_gc
@@ -89,7 +95,7 @@ class _ExtractStrategy:
         )
 
     def _start(self, name: str, sga_path: str) -> None:
-        self.logger.info(
+        self.verbose_logger.info(
             BraceMessage(
                 "Starting {name} extraction: {sga_path}", name=name, sga_path=sga_path
             )
@@ -99,7 +105,7 @@ class _ExtractStrategy:
     def _collect(
         self, sga_path: str, file_filter: Optional[Sequence[str]] = None
     ) -> list[FileEntry]:
-        self.logger.info("Collecting file paths...")
+        self.verbose_logger.info("Collecting file paths...")
         with self._timer() as timer:
             entries = NativeParserV2(sga_path, self.logger).parse()
             self.stats.timings.parsing_sga = timer()
@@ -110,14 +116,16 @@ class _ExtractStrategy:
                 file_filter_set = set(file_filter)
                 entries = [p for p in entries if p.path in file_filter_set]
                 self.stats.timings.filtering_files = timer()
-            self.logger.info(f"Filtered to {len(entries)} changed files")
+            self.verbose_logger.info(f"Filtered to {len(entries)} changed files")
 
         self.stats.total_files = len(entries)
-        self.logger.info(f"Found {len(entries)} files")
+        self.verbose_logger.info(f"Found {len(entries)} files")
         return entries
 
-    def _create_dirs(self, entries: list[FileEntry], output_dir: str) -> None:
-        self.logger.info("Pre-creating directory structure...")
+    def _create_dirs(self, entries: list[FileEntry], output_dir: str, force:bool=False) -> None:
+        if not force and not self._precreate_dirs:
+            return
+        self.verbose_logger.info("Pre-creating directory structure...")
         with self._timer() as timer:
 
             created_dirs = 0
@@ -126,23 +134,23 @@ class _ExtractStrategy:
                 if self.directories.ensure_directory(dst_path.parent):
                     created_dirs += 1
             self.stats.timings.creating_dirs = timer()
-        self.logger.info(f"Created {created_dirs} directories")
+        self.verbose_logger.info(f"Created {created_dirs} directories")
 
     def _create_batches(
         self, entries: list[FileEntry], batch_size: int
     ) -> List[List[FileEntry]]:
-        self.logger.info(f"Extracting {len(entries)} files...")
+        self.verbose_logger.info(f"Extracting {len(entries)} files...")
         # Dont bother with stats if batching is skipped
         if batch_size == 0:
-            self.logger.info("Batching not enabled - skipping batching...")
+            self.verbose_logger.info("Batching not enabled - skipping batching...")
             return [entries]
         if batch_size < 0:
-            self.logger.info(
+            self.logger.error(
                 f"Invalid batch size '{batch_size}' - skipping batching..."
             )
             return [entries]
 
-        self.logger.info(f"Creating batches of '{batch_size}'")
+        self.verbose_logger.info(f"Creating batches of '{batch_size}'")
 
         # Create batches
         batches = []
@@ -155,7 +163,7 @@ class _ExtractStrategy:
                 offset = batch_count * batch_size
                 batches.append(entries[offset : offset + remaining])
             self.stats.timings.creating_batches = timer()
-        self.logger.info(f"Created {len(batches)} batches")
+        self.verbose_logger.info(f"Created {len(batches)} batches")
         return batches
 
     def _extract_batch_isolated(
@@ -187,7 +195,7 @@ class _ExtractStrategy:
 
                         # Ignore dir creation; should be handled before batching
                         # # Create parent directory (CACHED for speed!)
-                        # self.directories.ensure_directory(native_dst.parent)
+                        self.directories.ensure_directory(native_dst.parent)
 
                         # # Extract with chunked reading (use NATIVE Python file for writing!)
                         # # For small files, use smaller chunks (64KB) for better responsiveness
@@ -286,14 +294,9 @@ class _ExtractStrategy:
         self.logger.info(f"  Filtering SGA:        {self.stats.timings.filtering_files:.4f}")
         self.logger.info(f"  Creating directories: {self.stats.timings.creating_dirs:.4f}")
         self.logger.info(f"  Creating Batches:     {self.stats.timings.creating_batches:.4f}")
-        self.logger.info(f"  Running Batches:      {self.stats.timings.creating_batches:.4f}")
+        self.logger.info(f"  Running Batches:      {self.stats.timings.executing_batches:.4f}")
         self.logger.info(f"  Total Time:           {self.stats.timings.total_time:.4f}")
 
-        # Todo; allow timings in summary1
-        # self.logger.info(f"  Time:       {t_extract:.2f}s")
-        # self.logger.info(
-        #     f"  Throughput: {self.stats.extracted_bytes / t_extract / 1024 / 1024:.0f} MB/s"
-        # )
 
     @contextmanager
     def _disable_gc(self) -> Generator[None, Any, None]:
@@ -347,7 +350,7 @@ class OptimizedStrategy(_ExtractStrategy):
         self._start("OPTIMIZED", sga_path)
         # FAST MODE: Skip metadata collection, just get file paths!
         entries = self._collect(sga_path, file_filter)
-        # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
+        # # PRE-CREATE ALL DIRECTORIES (avoid per-file checks!)
         self._create_dirs(entries, output_dir)
         # Create batches
         with self._disable_gc():
@@ -765,6 +768,8 @@ class UnpackerConfig:
     disable_gc: bool = True
     batch_size: int = 128  # arbitrary value
     native_files: bool = False
+    precreate_dirs:bool = True
+    verbose: bool = False
 
 
 class DirectoryCacher:
@@ -797,6 +802,8 @@ class DirectoryCacher:
             if dir_str not in self._dir_cache:
                 dir_path.mkdir(parents=True, exist_ok=True)
                 self._dir_cache.add(dir_str)
+                for parent_path in dir_path.parents:
+                    self._dir_cache.add(str(parent_path))
                 return CREATED
 
         return not CREATED
@@ -1132,6 +1139,7 @@ class SerialStrategy(_ExtractStrategy):
 
                             # Write to disk
                             dst_path = Path(output_dir) / file.path.lstrip("/")
+                            self.directories.ensure_directory(dst_path.parent)
                             fd = os.open(
                                 dst_path,
                                 OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
