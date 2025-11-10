@@ -161,12 +161,14 @@ class _ExtractStrategy:
 
     def _create_dirs(self, entries: list[FileEntry], output_dir: str) -> None:
         self.logger.info("Pre-creating directory structure...")
-        unique_dirs = set()
+
+        created_dirs = 0
         for file in entries:
             dst_path = Path(output_dir) / file.path.lstrip("/")
-            self.directories.ensure_directory(dst_path)
+            if self.directories.ensure_directory(dst_path):
+                created_dirs += 1
 
-        self.logger.info(f"Created {len(unique_dirs)} directories")
+        self.logger.info(f"Created {created_dirs} directories")
 
     def _create_batches(
         self, entries: list[FileEntry], workers: int, batch_size: int
@@ -548,6 +550,14 @@ class StreamingStrategy(_ExtractStrategy):
         return self.stats
 
 
+@dataclass(slots=True)
+class UltraFastBatchResult:
+    extracted: int = 0
+    failed: int = 0
+    bytes: int = 0
+    batch_size: int = 0
+
+
 class UltraFastStrategy(_ExtractStrategy):
     def extract(
         self,
@@ -576,13 +586,12 @@ class UltraFastStrategy(_ExtractStrategy):
             batch_size = 50
             file_batches = self._create_batches(files, max_workers, batch_size)
 
-            processed = [0]
+            processed = 0
             lock = threading.Lock()
 
-            def process_batch(batch: list[FileEntry]) -> dict[str, int]:
+            def process_batch(batch: list[FileEntry]) -> UltraFastBatchResult:
                 """Process batch with dedicated SGA handle."""
-                local_stats = {"extracted": 0, "failed": 0, "bytes": 0}
-
+                local_result = UltraFastBatchResult(batch_size=len(batch))
                 # Each worker opens its own SGA
                 with SgaReader(sga_path) as sga:
                     for file in batch:
@@ -599,23 +608,13 @@ class UltraFastStrategy(_ExtractStrategy):
                             os.write(fd, data)
                             os.close(fd)
 
-                            local_stats["extracted"] += 1
-                            local_stats["bytes"] += len(data)
+                            local_result.extracted += 1
+                            local_result.bytes += len(data)
 
                         except Exception as e:
-                            local_stats["failed"] += 1
-                            if local_stats["failed"] <= 3:
+                            local_result.failed += 1
+                            if local_result.failed <= 3:
                                 self.logger.error(f"Failed {file.path}: {e}")
-
-                # Update global stats
-                with lock:
-                    self.stats.extracted_files += local_stats["extracted"]
-                    self.stats.failed_files += local_stats["failed"]
-                    self.stats.extracted_bytes += local_stats["bytes"]
-                    processed[0] += len(batch)
-
-                    if on_progress and processed[0] % 500 == 0:
-                        on_progress(processed[0], self.stats.total_files)
 
                 return local_stats
 
@@ -628,14 +627,25 @@ class UltraFastStrategy(_ExtractStrategy):
 
                     for future in as_completed(futures):
                         try:
-                            future.result()
+                            local_stats = future.result()
+                            self.stats.extracted_files += local_stats.extracted
+                            self.stats.failed_files += local_stats.failed
+                            self.stats.extracted_bytes += local_stats.bytes
+                            processed += local_stats.batch_size
+
+                            # if on_progress and processed[0] % 500 == 0: # TODO fix the mod operation
+                            if on_progress:
+                                on_progress(processed, self.stats.total_files)
                         except Exception as e:
-                            self.logger.error(f"Batch failed: {e}")
+                            self.logger.error(
+                                f"Batch failed: {e}"
+                            )  # TODO; use exception
+
                 t_extract = timer()
 
             # Final progress
             if on_progress:
-                on_progress(processed[0], self.stats.total_files)
+                on_progress(processed, self.stats.total_files)
 
         # Summary
         self._print_summary()
@@ -808,6 +818,7 @@ class DirectoryCacher:
                 return CREATED
 
         return not CREATED
+
 
 class ProgressiveStrategy(_ExtractStrategy):
     def __init__(

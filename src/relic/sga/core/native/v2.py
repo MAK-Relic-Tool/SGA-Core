@@ -42,7 +42,7 @@ class NativeParserV2:
 
         Args:
             sga_path: Path to SGA archive
-            logger: 
+            logger:
         """
         self.sga_path = sga_path
         self.logger = logger
