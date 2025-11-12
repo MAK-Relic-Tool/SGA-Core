@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass
-from functools import total_ordering
 from enum import Enum, IntFlag
+from functools import total_ordering
 from typing import Any, Tuple, Iterable, Union, List, TypeVar
 
 from relic.core.serialization import MagicWord
@@ -22,8 +21,7 @@ _T = TypeVar("_T")
 def _has_get_attr(o: Any, name: str, default: _T) -> _T:
     if hasattr(o, name):
         return getattr(o, name)  # type: ignore
-    else:
-        return default
+    return default
 
 
 # Safe versions of existing flags

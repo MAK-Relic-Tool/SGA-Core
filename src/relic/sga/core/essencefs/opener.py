@@ -6,11 +6,10 @@ from typing import Protocol, BinaryIO, TypeVar, List, Iterable, Union, Type
 
 import fs.opener
 from fs.opener import Opener
-
 from fs.opener.parse import ParseResult
+from relic.core.entrytools import EntrypointRegistry
 from relic.core.errors import RelicToolError
 from relic.core.lazyio import BinaryProxy, get_proxy
-from relic.core.entrytools import EntrypointRegistry
 
 from relic.sga.core.definitions import Version, MAGIC_WORD
 from relic.sga.core.errors import VersionNotSupportedError

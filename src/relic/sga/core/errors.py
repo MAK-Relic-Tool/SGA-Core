@@ -3,6 +3,7 @@
 from typing import List, Optional, Generic, TypeVar
 
 from relic.core.errors import MismatchError, RelicToolError
+
 from relic.sga.core.definitions import Version
 
 _T = TypeVar("_T")
