@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import mmap
+import os
 import struct
 from dataclasses import dataclass
 from typing import Dict, BinaryIO, Any, Callable
 
-from relic.sga.core.definitions import StorageType, Version, MAGIC_WORD
+from relic.sga.core.definitions import StorageType, Version, MAGIC_WORD, OSFlags
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.native.definitions import FileEntry
 
@@ -37,6 +39,9 @@ class NativeParserV2:
     Target: 3-4 seconds for 7,815 files!
     """
 
+    _HEADER_START = 12
+    _TOC_OFFSET = 180
+
     def __init__(
         self,
         sga_path: str,
@@ -49,52 +54,82 @@ class NativeParserV2:
             sga_path: Path to SGA archive
             logger:
         """
-        self.sga_path = sga_path
+        self._sga_path = sga_path
         self.logger = logger
         self._files: Dict[str, FileEntry] = {}
         self._data_block_start = 0
         self._should_merge = should_merge
         # Parse the binary format
         self._parsed = False
+        self._file_handle = None
+        self._mmap_handle = None
+
+    def open(self) -> None:
+        """Open memory-mapped access."""
+        if self._mmap_handle is None:
+            self._file_handle = os.open(
+                self._sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
+            )
+            self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
+
+    def close(self) -> None:
+        """Close memory-mapped access."""
+        if self._mmap_handle:
+            self._mmap_handle.close()
+            self._mmap_handle = None  # type: ignore
+        if self._file_handle is not None:
+            os.close(self._file_handle)
+            self._file_handle = None  # type: ignore
+
+    def __enter__(self) -> NativeParserV2:
+        self.open()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
     def _log(self, msg: str) -> None:  # TODO; use logger directly and use BraceMessages
         """Log if verbose."""
         if self.logger:
             self.logger.debug(f"[Parser] {msg}")
 
-    @staticmethod
-    def _parse_toc_pair(f: BinaryIO) -> TocPointer:
-        offset = struct.unpack("<I", f.read(4))[0]
-        count = struct.unpack("<H", f.read(2))[0]
+    def _parse_toc_pair(self, block_index: int) -> TocPointer:
+        _SIZE = 6
+        offset = self._TOC_OFFSET + block_index * _SIZE
+        buffer = self._mmap_handle[offset : offset + _SIZE]
+        offset, count = struct.unpack("<IH", buffer)
         return TocPointer(offset, count)
 
-    def _parse_toc(self, f: BinaryIO) -> TocPointers:
-        drives = self._parse_toc_pair(f)
-        folders = self._parse_toc_pair(f)
-        files = self._parse_toc_pair(f)
-        names = self._parse_toc_pair(f)
+    def _parse_toc(self) -> TocPointers:
+        [drives, folders, files, names] = [self._parse_toc_pair(_) for _ in range(4)]
+
         return TocPointers(drives, folders, files, names)
 
     def _parse_names(
         self,
-        f: BinaryIO,
         ptrs: TocPointers,
         toc_size: int,
     ) -> Dict[int, str]:
-        toc_base = 180
+
+        def determine_buffer_size():
+            relative_terminal = toc_size
+            if not all(offset < ptrs.name.offset for offset in _non_name_offsets):
+                # Determine *next* offset to determine the size of the buffer
+                relative_terminal = toc_size
+                for offset in _non_name_offsets:
+                    if ptrs.name.offset < offset < relative_terminal:
+                        relative_terminal = offset
+            return relative_terminal - ptrs.name.offset
+
         # Parse string table FIRST (names are stored here!)
         self._log("Parsing string table...")
-        f.seek(toc_base + ptrs.name.offset)
+        name_base_offset = self._TOC_OFFSET + ptrs.name.offset
         _non_name_offsets = [ptrs.drive.offset, ptrs.folder.offset, ptrs.file.offset]
         # well formatted TOC; we can determine the size of the name table using the TOC size (name size is always last)
-        name_buffer_terminal = toc_size
-        if not all(offset < ptrs.name.offset for offset in _non_name_offsets):
-            # Determine *next* offset to determine the size of the buffer
-            name_buffer_terminal = toc_size
-            for offset in _non_name_offsets:
-                if ptrs.name.offset < offset < name_buffer_terminal:
-                    name_buffer_terminal = offset
-        string_table_data = f.read(name_buffer_terminal - ptrs.name.offset)
+        buffer_size = determine_buffer_size()
+        string_table_data = self._mmap_handle[
+            name_base_offset : name_base_offset + buffer_size
+        ]
         names = {}
         running_index = 0
         for name in string_table_data.split(b"\0"):
@@ -102,20 +137,30 @@ class NativeParserV2:
             running_index += len(name) + 1
         return names
 
-    def _parse_drives(self, f: BinaryIO, ptr: TocPointer) -> list[dict[str, Any]]:
-        toc_base = 180
+    def _parse_drives(self, ptr: TocPointer) -> list[dict[str, Any]]:
         # Parse drives (138 bytes each)
         self._log("Parsing drives...")
         drives = []
-        f.seek(toc_base + ptr.offset)
-        for _ in range(ptr.count):
+        base_offset = self._TOC_OFFSET + ptr.offset
+        s = struct.Struct("<64s64s5H")
+
+        for drive_index in range(ptr.count):
+            offset = base_offset + drive_index * s.size
+            buffer = self._mmap_handle[offset : offset + s.size]
+            (
+                alias,
+                name,
+                first_folder,
+                last_folder,
+                first_file,
+                last_file,
+                root_folder,
+            ) = s.unpack(buffer)
             # Drive structure: alias(64), name(64), first_folder(2), last_folder(2),
             #                  first_file(2), last_file(2), root_folder(2)
-            alias = f.read(64).rstrip(b"\x00").decode("utf-8", errors="ignore")
-            name = f.read(64).rstrip(b"\x00").decode("utf-8", errors="ignore")
-            first_folder, last_folder, first_file, last_file, root_folder = (
-                struct.unpack("<HHHHH", f.read(10))
-            )
+            alias = alias.rstrip(b"\x00").decode("utf-8", errors="ignore")
+            name = name.rstrip(b"\x00").decode("utf-8", errors="ignore")
+
             drives.append(
                 {
                     "alias": alias,
@@ -132,21 +177,22 @@ class NativeParserV2:
 
     def _parse_folders(
         self,
-        f: BinaryIO,
         ptr: TocPointer,
         string_table: dict[int, str],
     ) -> list[dict[str, Any]]:
-        toc_base = 180
-
+        s = struct.Struct("<IHHHH")
         # Parse folders (12 bytes each)
         self._log("Parsing folders...")
         folders = []
-        f.seek(toc_base + ptr.offset)
-        for _ in range(ptr.count):
+        base_offset = self._TOC_OFFSET + ptr.offset
+        for folder_index in range(ptr.count):
+            offset = base_offset + folder_index * s.size
+            buffer = self._mmap_handle[offset : offset + s.size]
             # Folder: name_offset(4), subfolder_start(2), subfolder_stop(2), first_file(2), last_file(2)
-            name_off, subfolder_start, subfolder_stop, first_file, last_file = (
-                struct.unpack("<IHHHH", f.read(12))
+            name_off, subfolder_start, subfolder_stop, first_file, last_file = s.unpack(
+                buffer
             )
+
             folder_name = string_table[name_off]
             folders.append(
                 {
@@ -161,19 +207,20 @@ class NativeParserV2:
 
     def _parse_files(
         self,
-        f: BinaryIO,
         ptr: TocPointer,
         string_table: dict[int, str],
     ) -> list[dict[str, Any]]:
-        toc_base = 180
+        s = struct.Struct("<IIIII")
         # Parse files (20 bytes each)
         self._log(f"Parsing {ptr.count} files...")
         files = []
-        f.seek(toc_base + ptr.offset)
-        for i in range(ptr.count):
+        base_offset = self._TOC_OFFSET + ptr.offset
+        for file_index in range(ptr.count):
+            offset = base_offset + file_index * s.size
+            buffer = self._mmap_handle[offset : offset + s.size]
             # File: name_offset(4), flags(4), data_offset(4), compressed_size(4), decompressed_size(4)
-            name_off, flags, data_offset, compressed_size, decompressed_size = (
-                struct.unpack("<IIIII", f.read(20))
+            name_off, flags, data_offset, compressed_size, decompressed_size = s.unpack(
+                buffer
             )
             file_name = string_table[name_off]
 
@@ -192,73 +239,69 @@ class NativeParserV2:
                 }
             )
 
-            if i < 5:  # Debug first 5
+            if file_index < 5:  # Debug first 5
                 self._log(
-                    f"  File[{i}]: {file_name}, offset={data_offset},"
+                    f"  File[{file_index}]: {file_name}, offset={data_offset},"
                     f" comp={compressed_size}, decomp={decompressed_size}, type={storage_type}"
                 )
         return files
 
     def _parse_sga_binary(self) -> None:  # TODO; move to v2
         """Parse SGA V2 binary format manually."""
-        self._log(f"Opening {self.sga_path}...")
+        self._log(f"Opening {self._sga_path}...")
 
-        with open(self.sga_path, "rb") as f:
-            # Parse header
-            MAGIC_WORD.validate(f, advance=True)
+        # Parse header
+        MAGIC_WORD.validate(self._mmap_handle[0:8])
 
-            # Read version
-            major, minor = struct.unpack("<HH", f.read(4))
-            version = Version(major, minor)
-            self._log(f"SGA Version: {major}.{minor}")
-            VERSION = Version(2, 0)
-            if version != VERSION:
-                raise VersionNotSupportedError(version, [VERSION])
+        # Read version
+        major, minor = struct.unpack("<HH", self._mmap_handle[8:12])
+        version = Version(major, minor)
+        self._log(f"SGA Version: {major}.{minor}")
+        VERSION = Version(2, 0)
+        if version != VERSION:
+            raise VersionNotSupportedError(version, [VERSION])
 
-            # Read header (SGA V2 header is 180 bytes total, TOC starts at 180)
-            # The actual offsets are 12 bytes later than documented:
-            # toc_size at offset 172, data_pos at offset 176
-            f.seek(172)
-            toc_size = struct.unpack("<I", f.read(4))[0]
-            data_pos = struct.unpack("<I", f.read(4))[0]
+        # Read header (SGA V2 header is 180 bytes total, TOC starts at 180)
+        # The actual offsets are 12 bytes later than documented:
+        # toc_size at offset 172, data_pos at offset 176
+        header_struct = struct.Struct("<16s128s16sII")
+        buffer = self._mmap_handle[12:180]
+        file_hash, archive_name, toc_hash, toc_size, data_offset = header_struct.unpack(
+            buffer
+        )
 
-            self._log(f"TOC size: {toc_size} bytes")
-            self._log(f"Data starts at offset: {data_pos}")
+        self._log(f"TOC size: {toc_size} bytes")
+        self._log(f"Data starts at offset: {data_offset}")
 
-            self._data_block_start = data_pos
+        self._data_block_start = data_offset
 
-            # TOC starts at offset 180 for V2
-            f.seek(180)
+        # Parse TOC Header
+        # Format: drive_pos(4), drive_count(2), folder_pos(4), folder_count(2),
+        #         file_pos(4), file_count(2), name_pos(4), name_count(2)
+        toc_ptrs = self._parse_toc()
 
-            # Parse TOC Header
-            # Format: drive_pos(4), drive_count(2), folder_pos(4), folder_count(2),
-            #         file_pos(4), file_count(2), name_pos(4), name_count(2)
-            toc_ptrs = self._parse_toc(f)
-            if isinstance(self._should_merge, bool):
-                merging = self._should_merge
-            else:
-                merging = self._should_merge(toc_ptrs.drive.count)
+        if isinstance(self._should_merge, bool):
+            merging = self._should_merge
+        else:
+            merging = self._should_merge(toc_ptrs.drive.count)
+        self._log(
+            f"TOC: {toc_ptrs.drive.count} drives, {toc_ptrs.folder.count} folders,"
+            f" {toc_ptrs.file.count} files, {toc_ptrs.name.count} strings"
+        )
 
-            self._log(
-                f"TOC: {toc_ptrs.drive.count} drives, {toc_ptrs.folder.count} folders,"
-                f" {toc_ptrs.file.count} files, {toc_ptrs.name.count} strings"
-            )
+        string_table = self._parse_names(toc_ptrs, toc_size)
+        drives = self._parse_drives(toc_ptrs.drive)
+        folders = self._parse_folders(toc_ptrs.folder, string_table)
+        files = self._parse_files(toc_ptrs.file, string_table)
 
-            string_table = self._parse_names(f, toc_ptrs, toc_size)
-            drives = self._parse_drives(f, toc_ptrs.drive)
-            folders = self._parse_folders(f, toc_ptrs.folder, string_table)
-            files = self._parse_files(f, toc_ptrs.file, string_table)
+        # Build file map
+        self._log("Building file map...")
+        self._log(f"Data block starts at offset: {self._data_block_start}")
+        for drive in drives:
+            drive_name = drive["name"]
+            self._build_file_paths(folders, files, drive["root_folder"], drive_name, "")
 
-            # Build file map
-            self._log("Building file map...")
-            self._log(f"Data block starts at offset: {self._data_block_start}")
-            for drive in drives:
-                drive_name = drive["name"]
-                self._build_file_paths(
-                    folders, files, drive["root_folder"], drive_name, "", merging
-                )
-
-            self._log(f"Successfully parsed {len(self._files)} files!")
+        self._log(f"Successfully parsed {len(self._files)} files!")
 
     def _build_file_paths(
         self,
@@ -321,7 +364,9 @@ class NativeParserV2:
 
     def parse(self) -> list[FileEntry]:
         if not self._parsed:
-            self._parse_sga_binary()
+            with self:  # ensure we are open
+                self._parse_sga_binary()
+
         return self.get_file_entries()
 
     def get_file_entries(self) -> list[FileEntry]:
