@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import datetime
+import mmap
+import os
 from dataclasses import dataclass, field
+from typing import Self, Any, TypeVar, Generic
 
-from relic.sga.core.definitions import StorageType
+from relic.sga.core.definitions import StorageType, OSFlags
 
 
 @dataclass(slots=True)
@@ -70,11 +73,14 @@ class ExtractionPlanCategory:
     workers: int
 
 
+_T = TypeVar("_T")
+
+
 @dataclass(slots=True)
-class ReadResult:
+class ReadResult(Generic[_T]):
 
     path: str
-    data: bytes | None
+    data: _T | None
     error: str | None = None
 
 
@@ -99,3 +105,34 @@ class ChecksumResult:
     path: str
     checksum: str | None
     error: str | None = None
+
+
+class ReadonlyMemMapFile:
+    def __init__(self, path: str):
+        self._file_path = path
+        self._file_handle: int = None  # type: ignore
+        self._mmap_handle: mmap.mmap = None  # type: ignore
+
+    def open(self) -> None:
+        """Open memory-mapped access."""
+        if self._mmap_handle is None:
+            self._file_handle = os.open(
+                self._file_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
+            )
+            self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
+
+    def close(self) -> None:
+        """Close memory-mapped access."""
+        if self._mmap_handle:
+            self._mmap_handle.close()
+            self._mmap_handle = None  # type: ignore
+        if self._file_handle is not None:
+            os.close(self._file_handle)
+            self._file_handle = None  # type: ignore
+
+    def __enter__(self) -> Self:
+        self.open()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()

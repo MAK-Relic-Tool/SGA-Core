@@ -5,6 +5,7 @@ from typing import BinaryIO, Optional, Generic, TypeVar, Type, Union, Protocol
 
 from relic.core.lazyio import read_chunks
 from relic.core.logmsg import BraceMessage
+
 from relic.sga.core.errors import (
     HashMismatchError,
     Md5MismatchError,

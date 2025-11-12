@@ -8,20 +8,21 @@ Completely bypasses fs library for maximum speed!
 
 from __future__ import annotations
 
-import mmap
-import os
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import Any, List
+from typing import List, TypeVar
 
-from relic.core.errors import MismatchError
+from relic.core.errors import MismatchError, RelicToolError
 
-from relic.sga.core.definitions import OSFlags, StorageType
-from relic.sga.core.native.definitions import FileEntry, ReadResult
+from relic.sga.core.definitions import StorageType
+from relic.sga.core.native.definitions import FileEntry, ReadResult, ReadonlyMemMapFile
+
+_TIn = TypeVar("_TIn")
+_TOut = TypeVar("_TOut")
 
 
-class SgaReader:
+class SgaReader(ReadonlyMemMapFile):
     """
     Reads an SGA file using FileEntry objects.
 
@@ -33,14 +34,19 @@ class SgaReader:
     """
 
     def __init__(self, sga_path: str):
-        self._sga_path = sga_path
-        self._mmap_handle: mmap.mmap = None  # type: ignore
-        self._file_handle: int = None  # type: ignore
+        super().__init__(sga_path)
 
-    def read_buffer(self, entry: FileEntry, decompress: bool = True) -> bytes:
-        raw = self._mmap_handle[
-            entry.data_offset : entry.data_offset + entry.compressed_size
-        ]
+    def read(self, offset: int, size: int) -> bytes:
+        buffer = self._mmap_handle[offset : offset + size]
+        if len(buffer) != size:
+            raise MismatchError("read mismatch", len(buffer), size)
+        return buffer
+
+    def read_range(self, offset: int, terminal: int) -> bytes:
+        return self.read(offset, terminal - offset)
+
+    def read_file(self, entry: FileEntry, decompress: bool = True) -> bytes:
+        raw = self.read(entry.data_offset, entry.compressed_size)
         if not decompress:
             return raw
         if entry.storage_type in [StorageType.STORE]:
@@ -55,21 +61,21 @@ class SgaReader:
                     "size mismatch", len(zlib_buffer), entry.decompressed_size
                 )
             return zlib_buffer
-        raise NotImplementedError(
+        raise RelicToolError(
             f"read_buffer does not support StorageType='{entry.storage_type}'"
-        )  # TODO
+        )
 
-    def read_file(self, entry: FileEntry, decompress: bool = True) -> BytesIO:
-        return BytesIO(self.read_buffer(entry, decompress))
+    def open_file(self, entry: FileEntry, decompress: bool = True) -> BytesIO:
+        return BytesIO(self.read_file(entry, decompress))
 
     def read_files_parallel(
-        self, file_paths: List[FileEntry], num_workers: int = 16
-    ) -> List[ReadResult]:
+        self, file_paths: List[FileEntry], num_workers: int
+    ) -> List[ReadResult[bytes]]:
         """Read and decompress files in PARALLEL."""
 
-        def read_decompress(entry: FileEntry) -> ReadResult:
+        def read_decompress(entry: FileEntry) -> ReadResult[bytes]:
             try:
-                data = self.read_buffer(entry)
+                data = self.read_file(entry)
                 return ReadResult(entry.path, data, None)
             except Exception as e:
                 return ReadResult(entry.path, b"", str(e))
@@ -78,27 +84,3 @@ class SgaReader:
             results = list(executor.map(read_decompress, file_paths))
 
         return results
-
-    def open(self) -> None:
-        """Open memory-mapped access."""
-        if self._mmap_handle is None:
-            self._file_handle = os.open(
-                self._sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
-            )
-            self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
-
-    def close(self) -> None:
-        """Close memory-mapped access."""
-        if self._mmap_handle:
-            self._mmap_handle.close()
-            self._mmap_handle = None  # type: ignore
-        if self._file_handle is not None:
-            os.close(self._file_handle)
-            self._file_handle = None  # type: ignore
-
-    def __enter__(self) -> SgaReader:
-        self.open()
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self.close()

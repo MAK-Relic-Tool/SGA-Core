@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed, Future
 from contextlib import contextmanager
 from dataclasses import dataclass
-from enum import StrEnum, IntEnum
+from enum import IntEnum
 from pathlib import Path
 from typing import (
     Callable,
@@ -35,7 +35,6 @@ from typing import (
     Generator,
     Sequence,
     TypeAlias,
-    no_type_check,
 )
 
 from relic.core.logmsg import BraceMessage
@@ -51,7 +50,6 @@ from relic.sga.core.native.definitions import (
 )
 from relic.sga.core.native.native_reader import SgaReader
 from relic.sga.core.native.v2 import NativeParserV2
-
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 
@@ -207,7 +205,7 @@ class _ExtractStrategy:
                         #     64 * 1024,
                         # )  # 64KB - perfect for small files
                         if self.native_handles:
-                            with my_sga.read_file(entry) as src_file:
+                            with my_sga.open_file(entry) as src_file:
                                 with open(
                                     native_dst, "wb", buffering=self.chunk_size
                                 ) as dst_file:
@@ -219,7 +217,7 @@ class _ExtractStrategy:
 
                                     dst_file.flush()
                         else:
-                            data = my_sga.read_buffer(entry)
+                            data = my_sga.read_file(entry)
                             fd = os.open(
                                 native_dst,
                                 OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
@@ -431,7 +429,7 @@ class StreamingStrategy(_ExtractStrategy):
 
             # Shared deque with massive buffer
             buffer_size = min(len(entries), 10000)
-            file_deque: deque[ReadResult] = deque(maxlen=buffer_size)
+            file_deque: deque[ReadResult[bytes]] = deque(maxlen=buffer_size)
             self.logger.info(
                 f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
             )
@@ -450,7 +448,7 @@ class StreamingStrategy(_ExtractStrategy):
                     with SgaReader(sga_path) as reader:
                         for file in file_list:
                             try:
-                                data = reader.read_buffer(file)
+                                data = reader.read_file(file)
 
                                 with deque_not_empty:
                                     while len(file_deque) >= buffer_size:
@@ -591,7 +589,7 @@ class NativeStrategy(_ExtractStrategy):
             self.verbose_logger.info("Writing files to disk (parallel)...")
 
             def write_file(
-                item: ReadResult,
+                item: ReadResult[bytes],
             ) -> WriteResult:
                 path = item.path
                 err = item.error
@@ -806,7 +804,7 @@ class DeltaStrategy(_ExtractStrategy):
         """
         hasher = hashlib.md5()
 
-        with reader.read_file(entry) as f:
+        with reader.open_file(entry) as f:
             while chunk := f.read(self.chunk_size):
                 hasher.update(chunk)
 
@@ -1029,7 +1027,7 @@ class SerialStrategy(_ExtractStrategy):
                     for processed, file in enumerate(files):
                         try:
                             # Read and decompress (fs handles this)
-                            data = sga.read_buffer(file)
+                            data = sga.read_file(file)
 
                             # Write to disk
                             dst_path = Path(output_dir) / file.path.lstrip("/")

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import datetime
 import logging
-import mmap
-import os
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Dict, BinaryIO, Any, Callable
+from typing import Dict, Any, Callable, List
 
-from relic.sga.core.definitions import StorageType, Version, MAGIC_WORD, OSFlags
+from relic.core.errors import MismatchError
+
+from relic.sga.core.definitions import StorageType, Version, MAGIC_WORD
 from relic.sga.core.errors import VersionNotSupportedError
-from relic.sga.core.native.definitions import FileEntry
+from relic.sga.core.hashtools import crc32, md5
+from relic.sga.core.native.definitions import FileEntry, ReadonlyMemMapFile, ReadResult
 
 
 @dataclass(slots=True)
@@ -26,7 +29,22 @@ class TocPointers:
     name: TocPointer
 
 
-class NativeParserV2:
+@dataclass(slots=True)
+class ArchiveMeta:
+    file_md5: bytes
+    name: str
+    toc_md5: bytes
+    toc_size: int
+
+
+@dataclass(slots=True)
+class FileMetadata:
+    name: str
+    modified: datetime.datetime
+    crc32: int
+
+
+class NativeParserV2(ReadonlyMemMapFile):
     """REAL native SGA reader - parses binary format directly.
 
     This completely bypasses fs library by:
@@ -54,50 +72,33 @@ class NativeParserV2:
             sga_path: Path to SGA archive
             logger:
         """
-        self._sga_path = sga_path
+        super().__init__(sga_path)
         self.logger = logger
         self._files: Dict[str, FileEntry] = {}
         self._data_block_start = 0
         self._should_merge = should_merge
         # Parse the binary format
         self._parsed = False
-        self._file_handle = None
-        self._mmap_handle = None
-
-    def open(self) -> None:
-        """Open memory-mapped access."""
-        if self._mmap_handle is None:
-            self._file_handle = os.open(
-                self._sga_path, OSFlags.O_RDONLY | OSFlags.O_BINARY
-            )
-            self._mmap_handle = mmap.mmap(self._file_handle, 0, access=mmap.ACCESS_READ)
-
-    def close(self) -> None:
-        """Close memory-mapped access."""
-        if self._mmap_handle:
-            self._mmap_handle.close()
-            self._mmap_handle = None  # type: ignore
-        if self._file_handle is not None:
-            os.close(self._file_handle)
-            self._file_handle = None  # type: ignore
-
-    def __enter__(self) -> NativeParserV2:
-        self.open()
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self.close()
+        self._meta: ArchiveMeta = None  # type: ignore
 
     def _log(self, msg: str) -> None:  # TODO; use logger directly and use BraceMessages
         """Log if verbose."""
         if self.logger:
             self.logger.debug(f"[Parser] {msg}")
 
+    def _read_range(self, offset: int, terminal: int) -> bytes:
+        return self._read(offset, terminal - offset)
+
+    def _read(self, offset: int, size: int) -> bytes:
+        buffer = self._mmap_handle[offset : offset + size]
+        if len(buffer) != size:
+            raise MismatchError("Read", size, len(buffer))
+        return buffer
+
     def _parse_toc_pair(self, block_index: int) -> TocPointer:
-        _SIZE = 6
-        offset = self._TOC_OFFSET + block_index * _SIZE
-        buffer = self._mmap_handle[offset : offset + _SIZE]
-        offset, count = struct.unpack("<IH", buffer)
+        s = struct.Struct("<IH")
+        buffer = self._read(self._TOC_OFFSET + block_index * s.size, s.size)
+        offset, count = s.unpack(buffer)
         return TocPointer(offset, count)
 
     def _parse_toc(self) -> TocPointers:
@@ -111,7 +112,7 @@ class NativeParserV2:
         toc_size: int,
     ) -> Dict[int, str]:
 
-        def determine_buffer_size():
+        def determine_buffer_size() -> int:
             relative_terminal = toc_size
             if not all(offset < ptrs.name.offset for offset in _non_name_offsets):
                 # Determine *next* offset to determine the size of the buffer
@@ -127,9 +128,7 @@ class NativeParserV2:
         _non_name_offsets = [ptrs.drive.offset, ptrs.folder.offset, ptrs.file.offset]
         # well formatted TOC; we can determine the size of the name table using the TOC size (name size is always last)
         buffer_size = determine_buffer_size()
-        string_table_data = self._mmap_handle[
-            name_base_offset : name_base_offset + buffer_size
-        ]
+        string_table_data = self._read(name_base_offset, buffer_size)
         names = {}
         running_index = 0
         for name in string_table_data.split(b"\0"):
@@ -146,7 +145,7 @@ class NativeParserV2:
 
         for drive_index in range(ptr.count):
             offset = base_offset + drive_index * s.size
-            buffer = self._mmap_handle[offset : offset + s.size]
+            buffer = self._read(offset, s.size)
             (
                 alias,
                 name,
@@ -186,8 +185,7 @@ class NativeParserV2:
         folders = []
         base_offset = self._TOC_OFFSET + ptr.offset
         for folder_index in range(ptr.count):
-            offset = base_offset + folder_index * s.size
-            buffer = self._mmap_handle[offset : offset + s.size]
+            buffer = self._read(base_offset + folder_index * s.size, s.size)
             # Folder: name_offset(4), subfolder_start(2), subfolder_stop(2), first_file(2), last_file(2)
             name_off, subfolder_start, subfolder_stop, first_file, last_file = s.unpack(
                 buffer
@@ -216,8 +214,7 @@ class NativeParserV2:
         files = []
         base_offset = self._TOC_OFFSET + ptr.offset
         for file_index in range(ptr.count):
-            offset = base_offset + file_index * s.size
-            buffer = self._mmap_handle[offset : offset + s.size]
+            buffer = self._read(base_offset + file_index * s.size, s.size)
             # File: name_offset(4), flags(4), data_offset(4), compressed_size(4), decompressed_size(4)
             name_off, flags, data_offset, compressed_size, decompressed_size = s.unpack(
                 buffer
@@ -248,13 +245,13 @@ class NativeParserV2:
 
     def _parse_sga_binary(self) -> None:  # TODO; move to v2
         """Parse SGA V2 binary format manually."""
-        self._log(f"Opening {self._sga_path}...")
+        self._log(f"Opening {self._file_path}...")
 
         # Parse header
-        MAGIC_WORD.validate(self._mmap_handle[0:8])
+        MAGIC_WORD.validate(self._read_range(0, 8))
 
         # Read version
-        major, minor = struct.unpack("<HH", self._mmap_handle[8:12])
+        major, minor = struct.unpack("<HH", self._read_range(8, 12))
         version = Version(major, minor)
         self._log(f"SGA Version: {major}.{minor}")
         VERSION = Version(2, 0)
@@ -265,9 +262,13 @@ class NativeParserV2:
         # The actual offsets are 12 bytes later than documented:
         # toc_size at offset 172, data_pos at offset 176
         header_struct = struct.Struct("<16s128s16sII")
-        buffer = self._mmap_handle[12:180]
-        file_hash, archive_name, toc_hash, toc_size, data_offset = header_struct.unpack(
-            buffer
+        buffer = self._read_range(12, 180)
+        file_hash, _archive_name, toc_hash, toc_size, data_offset = (
+            header_struct.unpack(buffer)
+        )
+
+        archive_name: str = _archive_name.rstrip(b"\0").decode(
+            "utf-16", errors="ignore"
         )
 
         self._log(f"TOC size: {toc_size} bytes")
@@ -299,9 +300,13 @@ class NativeParserV2:
         self._log(f"Data block starts at offset: {self._data_block_start}")
         for drive in drives:
             drive_name = drive["name"]
-            self._build_file_paths(folders, files, drive["root_folder"], drive_name, "")
+            self._build_file_paths(
+                folders, files, drive["root_folder"], drive_name, "", merging
+            )
 
         self._log(f"Successfully parsed {len(self._files)} files!")
+
+        self._meta = ArchiveMeta(file_hash, archive_name, toc_hash, toc_size)
 
     def _build_file_paths(
         self,
@@ -371,3 +376,98 @@ class NativeParserV2:
 
     def get_file_entries(self) -> list[FileEntry]:
         return list(self._files.values())
+
+    def get_metadata(self) -> ArchiveMeta:
+        return self._meta
+
+
+class SgaMetadataTool(ReadonlyMemMapFile):
+    METADATA_STRUCT = struct.Struct("<256sII")
+    _FILE_MD5_EIGEN = b"E01519D6-2DB7-4640-AF54-0A23319C56C3"
+    _TOC_MD5_EIGEN = b"DFC9AF62-FC1B-4180-BC27-11CCE87D3EFF"
+
+    def _read(self, offset: int, size: int) -> bytes:
+        buffer = self._mmap_handle[offset : offset + size]
+        if len(buffer) != size:
+            raise MismatchError("Read", size, len(buffer))
+        return buffer
+
+    def _read_range(self, offset: int, terminal: int) -> bytes:
+        return self._read(offset, terminal - offset)
+
+    def read_metadata(self, entry: FileEntry) -> FileMetadata:
+        buffer = self._read_range(
+            entry.data_offset - self.METADATA_STRUCT.size, entry.data_offset
+        )
+        _name, unix_timestamp, crc32_hash = self.METADATA_STRUCT.unpack(buffer)
+        name = _name.rstrip("\0").decode("utf-8", errors="ignore")
+        modified = datetime.datetime.fromtimestamp(
+            unix_timestamp, datetime.timezone.utc
+        )
+        return FileMetadata(name, modified, crc32_hash)
+
+    def read_metadata_parallel(
+        self, file_paths: List[FileEntry], num_workers: int
+    ) -> List[ReadResult[FileMetadata]]:
+        """Read and decompress files in PARALLEL."""
+
+        def read(entry: FileEntry) -> ReadResult[FileMetadata]:
+            try:
+                data = self.read_metadata(entry)
+                return ReadResult(entry.path, data, None)
+            except Exception as e:
+                return ReadResult(entry.path, None, str(e))
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(read, file_paths))
+
+        return results
+
+    def verify_file(self, entry: FileEntry, metadata: FileMetadata) -> bool:
+        file_data = self._read(entry.data_offset, entry.compressed_size)
+        return crc32.check(file_data, metadata.crc32)
+
+    def verify_file_parallel(
+        self, entries: List[FileEntry], metas: List[FileMetadata], num_workers: int
+    ) -> List[ReadResult[bool]]:
+
+        def read(entry: FileEntry, meta: FileMetadata) -> ReadResult[bool]:
+            try:
+                verified = self.verify_file(entry, meta)
+                return ReadResult(entry.path, verified, None)
+            except Exception as e:
+                return ReadResult(entry.path, None, str(e))
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(read, zip(entries, metas)))
+
+        return results
+
+    @staticmethod
+    def update_modified(entry: FileEntry, metadata: FileMetadata) -> FileEntry:
+        entry.modified = metadata.modified
+        return entry
+
+    def update_modified_parallel(
+        self, entries: List[FileEntry], metas: List[FileMetadata], num_workers: int
+    ) -> List[ReadResult[FileEntry]]:
+        def update(entry: FileEntry, meta: FileMetadata) -> ReadResult[FileEntry]:
+            try:
+                updated = self.update_modified(entry, meta)
+                return ReadResult(entry.path, updated, None)
+            except Exception as e:
+                return ReadResult(entry.path, entry, str(e))
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(update, zip(entries, metas)))
+
+        return results
+
+    def verify_toc(self, meta: ArchiveMeta) -> bool:
+        buffer = self._read(180, meta.toc_size)
+        return md5.check(buffer, meta.toc_md5, eigen=self._TOC_MD5_EIGEN)
+
+    def verify_archive(self, meta: ArchiveMeta) -> bool:
+        terminal = len(self._mmap_handle)
+        buffer = self._read_range(180, terminal)
+        return md5.check(buffer, meta.file_md5, eigen=self._FILE_MD5_EIGEN)

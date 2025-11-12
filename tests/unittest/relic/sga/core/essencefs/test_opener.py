@@ -5,7 +5,6 @@ import fs.opener.errors
 import pytest
 from relic.core.errors import RelicToolError
 
-from tests.dummy_essencefs import register_randomfs_opener, RandomEssenceFsOpener
 from relic.sga.core import MAGIC_WORD, Version
 from relic.sga.core.errors import VersionNotSupportedError
 from relic.sga.core.essencefs.opener import (
@@ -15,6 +14,7 @@ from relic.sga.core.essencefs.opener import (
     _EssenceFsOpenerAdapter,
 )
 from relic.sga.core.serialization import VersionSerializer
+from tests.dummy_essencefs import register_randomfs_opener, RandomEssenceFsOpener
 from tests.util import TempFileHandle
 
 

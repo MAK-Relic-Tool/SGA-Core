@@ -8,26 +8,28 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 from json import JSONEncoder
 from logging import Logger
-from typing import Optional, Any, Dict, Sequence
+from typing import Optional, Any, Dict
+
+import relic.core.cli
 from fs import open_fs
 from fs.base import FS
 from fs.copy import copy_fs
-import relic.core.cli
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin, RelicArgParser
-from relic.sga.core.definitions import MAGIC_WORD
-from relic.sga.core.essencefs import EssenceFS
-from relic.sga.core.essencefs.opener import registry as sga_registry
-from relic.sga.core.serialization import VersionSerializer
-from relic.core.logmsg import BraceMessage
 from relic.core.cli import (
     get_file_type_validator,
     get_dir_type_validator,
     get_path_validator,
 )
+from relic.core.logmsg import BraceMessage
+
+from relic.sga.core.definitions import MAGIC_WORD
+from relic.sga.core.essencefs import EssenceFS
+from relic.sga.core.essencefs.opener import registry as sga_registry
 from relic.sga.core.native.parallel_advanced import (
     AdvancedParallelUnpacker,
     UnpackerConfig,
 )
+from relic.sga.core.serialization import VersionSerializer
 
 _SUCCESS = 0
 _FAIL = 1
