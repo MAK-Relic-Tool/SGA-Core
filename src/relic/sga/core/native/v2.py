@@ -5,6 +5,7 @@ import logging
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Dict, Any, Callable, List
 
 from relic.core.errors import MismatchError
@@ -74,7 +75,9 @@ class NativeParserV2(ReadonlyMemMapFile):
         """
         super().__init__(sga_path)
         self.logger = logger
-        self._files: Dict[str, FileEntry] = {}
+        self._files: list[dict[str, Any]] = []
+        self._folders: list[dict[str, Any]] = []
+        self._entries: Dict[str, FileEntry] = {}
         self._data_block_start = 0
         self._should_merge = should_merge
         # Parse the binary format
@@ -101,7 +104,7 @@ class NativeParserV2(ReadonlyMemMapFile):
         offset, count = s.unpack(buffer)
         return TocPointer(offset, count)
 
-    def _parse_toc(self) -> TocPointers:
+    def _parse_toc_header(self) -> TocPointers:
         [drives, folders, files, names] = [self._parse_toc_pair(_) for _ in range(4)]
 
         return TocPointers(drives, folders, files, names)
@@ -243,12 +246,9 @@ class NativeParserV2(ReadonlyMemMapFile):
                 )
         return files
 
-    def _parse_sga_binary(self) -> None:  # TODO; move to v2
-        """Parse SGA V2 binary format manually."""
-        self._log(f"Opening {self._file_path}...")
-
-        # Parse header
-        MAGIC_WORD.validate(self._read_range(0, 8))
+    def _parse_magic_and_version(self) -> None:
+        # TODO; make magicword accept bytes/bytearray
+        MAGIC_WORD.validate(BytesIO(self._read_range(0, 8)))
 
         # Read version
         major, minor = struct.unpack("<HH", self._read_range(8, 12))
@@ -258,6 +258,7 @@ class NativeParserV2(ReadonlyMemMapFile):
         if version != VERSION:
             raise VersionNotSupportedError(version, [VERSION])
 
+    def _parse_header(self) -> None:
         # Read header (SGA V2 header is 180 bytes total, TOC starts at 180)
         # The actual offsets are 12 bytes later than documented:
         # toc_size at offset 172, data_pos at offset 176
@@ -266,7 +267,6 @@ class NativeParserV2(ReadonlyMemMapFile):
         file_hash, _archive_name, toc_hash, toc_size, data_offset = (
             header_struct.unpack(buffer)
         )
-
         archive_name: str = _archive_name.rstrip(b"\0").decode(
             "utf-16", errors="ignore"
         )
@@ -275,11 +275,18 @@ class NativeParserV2(ReadonlyMemMapFile):
         self._log(f"Data starts at offset: {data_offset}")
 
         self._data_block_start = data_offset
+        self._meta = ArchiveMeta(file_hash, archive_name, toc_hash, toc_size)
+
+    def _parse_sga_binary(self) -> None:  # TODO; move to v2
+        """Parse SGA V2 binary format manually."""
+        self._log(f"Opening {self._file_path}...")
+        self._parse_magic_and_version()
+        self._parse_header()
 
         # Parse TOC Header
         # Format: drive_pos(4), drive_count(2), folder_pos(4), folder_count(2),
         #         file_pos(4), file_count(2), name_pos(4), name_count(2)
-        toc_ptrs = self._parse_toc()
+        toc_ptrs = self._parse_toc_header()
 
         if isinstance(self._should_merge, bool):
             merging = self._should_merge
@@ -290,38 +297,32 @@ class NativeParserV2(ReadonlyMemMapFile):
             f" {toc_ptrs.file.count} files, {toc_ptrs.name.count} strings"
         )
 
-        string_table = self._parse_names(toc_ptrs, toc_size)
+        string_table = self._parse_names(toc_ptrs, self._meta.toc_size)
         drives = self._parse_drives(toc_ptrs.drive)
-        folders = self._parse_folders(toc_ptrs.folder, string_table)
-        files = self._parse_files(toc_ptrs.file, string_table)
+        self._folders = self._parse_folders(toc_ptrs.folder, string_table)
+        self._files = self._parse_files(toc_ptrs.file, string_table)
 
         # Build file map
         self._log("Building file map...")
         self._log(f"Data block starts at offset: {self._data_block_start}")
         for drive in drives:
             drive_name = drive["name"]
-            self._build_file_paths(
-                folders, files, drive["root_folder"], drive_name, "", merging
-            )
+            self._build_file_paths(drive["root_folder"], drive_name, "", merging)
 
-        self._log(f"Successfully parsed {len(self._files)} files!")
-
-        self._meta = ArchiveMeta(file_hash, archive_name, toc_hash, toc_size)
+        self._log(f"Successfully parsed {len(self._entries)} files!")
 
     def _build_file_paths(
         self,
-        folders: list[dict[str, Any]],
-        files: list[dict[str, Any]],
         folder_idx: int,
         drive_name: str,
         current_path: str,
         exclude_drive: bool = False,
     ) -> None:
         """Recursively build full file paths."""
-        if folder_idx >= len(folders):
+        if folder_idx >= len(self._folders):
             return
 
-        folder = folders[folder_idx]
+        folder = self._folders[folder_idx]
         folder_name = folder["name"]
 
         # Normalize folder name (remove backslashes)
@@ -333,8 +334,8 @@ class NativeParserV2(ReadonlyMemMapFile):
 
         # Add files in this folder
         for file_idx in range(folder["first_file"], folder["last_file"]):
-            if file_idx < len(files):
-                file = files[file_idx]
+            if file_idx < len(self._files):
+                file = self._files[file_idx]
 
                 # Build full path
                 if exclude_drive:
@@ -358,13 +359,11 @@ class NativeParserV2(ReadonlyMemMapFile):
                     decompressed_size=file["decompressed_size"],
                     storage_type=file["storage_type"],
                 )
-                self._files[full_path] = entry
+                self._entries[full_path] = entry
 
         # Recurse into subfolders
         for subfolder_idx in range(folder["subfolder_start"], folder["subfolder_stop"]):
-            self._build_file_paths(
-                folders, files, subfolder_idx, drive_name, full_folder_path
-            )
+            self._build_file_paths(subfolder_idx, drive_name, full_folder_path)
         self._parsed = True
 
     def parse(self) -> list[FileEntry]:
@@ -375,13 +374,13 @@ class NativeParserV2(ReadonlyMemMapFile):
         return self.get_file_entries()
 
     def get_file_entries(self) -> list[FileEntry]:
-        return list(self._files.values())
+        return list(self._entries.values())
 
     def get_metadata(self) -> ArchiveMeta:
         return self._meta
 
 
-class SgaMetadataTool(ReadonlyMemMapFile):
+class NativeMetadataToolV2(ReadonlyMemMapFile):
     METADATA_STRUCT = struct.Struct("<256sII")
     _FILE_MD5_EIGEN = b"E01519D6-2DB7-4640-AF54-0A23319C56C3"
     _TOC_MD5_EIGEN = b"DFC9AF62-FC1B-4180-BC27-11CCE87D3EFF"
@@ -400,7 +399,7 @@ class SgaMetadataTool(ReadonlyMemMapFile):
             entry.data_offset - self.METADATA_STRUCT.size, entry.data_offset
         )
         _name, unix_timestamp, crc32_hash = self.METADATA_STRUCT.unpack(buffer)
-        name = _name.rstrip("\0").decode("utf-8", errors="ignore")
+        name = _name.rstrip(b"\0").decode("utf-8", errors="ignore")
         modified = datetime.datetime.fromtimestamp(
             unix_timestamp, datetime.timezone.utc
         )
@@ -416,12 +415,16 @@ class SgaMetadataTool(ReadonlyMemMapFile):
                 data = self.read_metadata(entry)
                 return ReadResult(entry.path, data, None)
             except Exception as e:
+                raise
                 return ReadResult(entry.path, None, str(e))
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             results = list(executor.map(read, file_paths))
 
         return results
+
+
+
 
     def verify_file(self, entry: FileEntry, metadata: FileMetadata) -> bool:
         file_data = self._read(entry.data_offset, entry.compressed_size)

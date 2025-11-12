@@ -179,7 +179,7 @@ class RelicSgaUnpackCli(CliPlugin):
                 return _SUCCESS
 
             except Exception as e:
-                logger.warning(f"Fast extraction failed:")
+                logger.warning("Fast extraction failed:")
                 logger.exception(e)
                 if use_legacy:
                     logger.info("Falling back to legacy mode...")

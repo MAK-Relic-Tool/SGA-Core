@@ -16,12 +16,12 @@ from relic.sga.core.native.parallel_advanced import (
 )
 
 logger = logging.getLogger()
-loglevel = logging.DEBUG
+loglevel = logging.WARN
 logger.setLevel(loglevel)
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(loglevel)
 logger.addHandler(handler)
-VERBOSE = True
+VERBOSE = False
 
 
 @contextmanager
@@ -37,7 +37,7 @@ def _timer() -> Generator[Callable[[], float], Any, None]:
 
 
 METHODS = [
-    ExtractionMethod.Native,  # parallel read / parallel write
+    ExtractionMethod.NATIVE,  # parallel read / parallel write
     # ExtractionMethod.Optimized, # batch read-write; update results
     # ExtractionMethod.UltraFast, # batch read-write; delayed update results
     # ExtractionMethod.Serial, # serial read / write # ignored; runtime is linear to size of file, not workers
@@ -69,13 +69,13 @@ def run_serial(path: str):
     unpacker = AdvancedParallelUnpacker(cfg)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        print(f"Extracting <{ExtractionMethod.Serial.name}>")
+        print(f"Extracting <{ExtractionMethod.SERIAL.name}>")
         ts = []
-        timings = {ExtractionMethod.Serial: ts}
+        timings = {ExtractionMethod.SERIAL: ts}
         for run in range(len(RUN_WORKERS)):
             # run is used to get an average; not to test workers
             with _timer() as timer:
-                unpacker.extract(path, tmpdir, method=ExtractionMethod.Serial)
+                unpacker.extract(path, tmpdir, method=ExtractionMethod.SERIAL)
                 time = timer()
                 ts.append(timer())
             print(f"Serial [{run}]: {time:.3f}")
@@ -179,10 +179,10 @@ def run_comparisons(path: str):
     )
     unpacker = AdvancedParallelUnpacker(cfg)
     _METHODS = [
-        ExtractionMethod.Serial,
-        ExtractionMethod.Optimized,
+        ExtractionMethod.SERIAL,
+        ExtractionMethod.OPTIMIZED,
         # ExtractionMethod.UltraFast, # Merged into optimized
-        ExtractionMethod.Native,
+        ExtractionMethod.NATIVE,
     ]
     _RUNS = 1  # len(run_workers)
     for method in _METHODS:
@@ -218,11 +218,53 @@ def run_comparisons(path: str):
         traceback.print_exception(e)
     return tot_timings
 
+def unpack_dir(dir_path: str, num_workers:int = None):
+    cfg = UnpackerConfig(
+        num_workers=num_workers or multiprocessing.cpu_count(),
+        logger=logger,
+        disable_gc=True,
+        native_files=False,
+        verbose=VERBOSE,
+        precache_dirs=True,
+    )
+    archives = list(Path(dir_path).rglob("*.sga"))
+    tot_bytes = 0
+    total_time = 0
+    total_files = 0
+    unpacker = AdvancedParallelUnpacker(cfg)
+
+    def print_stats(name:str,value:float,suffix:str, include_per_byte:bool=True):
+        print(f"{name}: {value:.2f}{suffix}")
+        print(f"\tPer Archive: {value/len(archives):.2f}{suffix}")
+        print(f"\tPer File: {value/total_files:.2f}{suffix}")
+        if include_per_byte:
+            print(f"\tPer Byte: {value/tot_bytes:.2f}{suffix}")
+
+    with tempfile.TemporaryDirectory() as outdir:
+        with _timer() as timer:
+            for i, archive in enumerate(archives):
+                print(f"Extracting <{archive.name}> ({i+1}/{len(archives)})")
+                stats = unpacker.extract(str(archive), outdir)
+                total_time += stats.timings.total_time
+                tot_bytes += stats.extracted_bytes
+                total_files += stats.extracted_files
+
+            print_stats("Total Time", timer(), "s")
+            print_stats("Stat Time", total_time, "s")
+            print_stats("Throughput (B)", tot_bytes / total_time, "Bps", include_per_byte=False)
+            print_stats("Throughput (KiB)", tot_bytes / 1024 / total_time, "KiBps", include_per_byte=False)
+            print_stats("Throughput (MiB)", tot_bytes / 1024 / 1024 / total_time, "MiBps", include_per_byte=False)
+            print_stats("Throughput (GiB)", tot_bytes / 1024 / 1024 / 1024 / total_time, "GiBps", include_per_byte=False)
+
+    # 1 Worker ~ 177MiBps
+    # 8 Workers ~ 333MiBps
+    # 32 ~ 360MiBps
 
 if __name__ == "__main__":
     _path = sys.argv[1]
+    unpack_dir(_path)
     # timings = run_comparisons(_path)
-    timings = run_comparisons(_path)
+    # timings = run_comparisons(_path)
     # with open(_path,"r") as h:
     #     timings = {ExtractionMethod(int(m)):v for m,v in json.load(h).items()}
 

@@ -33,9 +33,6 @@ class SgaReader(ReadonlyMemMapFile):
     These three keys allow us to quickly read raw sga files and decompress them if needed
     """
 
-    def __init__(self, sga_path: str):
-        super().__init__(sga_path)
-
     def read(self, offset: int, size: int) -> bytes:
         buffer = self._mmap_handle[offset : offset + size]
         if len(buffer) != size:

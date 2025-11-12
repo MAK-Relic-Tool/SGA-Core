@@ -54,7 +54,7 @@ class ExtractionStats:
     total_bytes: int = 0
     extracted_bytes: int = 0
     skipped_files: int = 0
-    timings: ExtractionTimings = field(default_factory=lambda: ExtractionTimings())
+    timings: ExtractionTimings = field(default_factory=ExtractionTimings)
 
 
 @dataclass(slots=True)

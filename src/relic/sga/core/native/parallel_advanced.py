@@ -11,6 +11,7 @@ This module provides an enhanced parallel unpacker with:
 
 from __future__ import annotations
 
+import datetime
 import gc
 import hashlib
 import json
@@ -49,13 +50,13 @@ from relic.sga.core.native.definitions import (
     BatchResult,
 )
 from relic.sga.core.native.native_reader import SgaReader
-from relic.sga.core.native.v2 import NativeParserV2
+from relic.sga.core.native.v2 import NativeParserV2, NativeMetadataToolV2, FileMetadata
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 
 
 # @no_type_check
-class FakeLogger(object):
+class FakeLogger:
     def __getattr__(self, name: Any) -> Any:
         def faker(*args: Any, **kwargs: Any) -> Any:
             return self
@@ -109,6 +110,23 @@ class _ExtractStrategy:
         self.verbose_logger.info("Collecting file paths...")
         with self._timer() as timer:
             entries = NativeParserV2(sga_path, self.logger, self.should_merge).parse()
+            try:
+                self.verbose_logger.info("Collecting file metadata...")
+                with NativeMetadataToolV2(sga_path) as metadata_fetcher:
+                    _metas = metadata_fetcher.read_metadata_parallel(entries, num_workers=self.num_workers)
+                    metas = {}
+                    for r in _metas:
+                        if r.error is not None:
+                            ... # TODO; print X errors
+                        metas[r.path]=r.data
+                for entry in entries:
+                    meta = metas.get(entry.path)
+                    if meta is not None:
+                        entry.modified = meta.modified
+            except Exception as e:
+                self.logger.error("Error collecting metadata")
+                self.logger.exception(e)
+
             self.stats.timings.parsing_sga = timer()
 
         # Apply filter if provided (DELTA MODE!)
@@ -222,6 +240,8 @@ class _ExtractStrategy:
                                 native_dst,
                                 OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
                             )
+                            if entry.modified:
+                                os.utime(native_dst, (entry.modified.timestamp(), entry.modified.timestamp()))
                             os.write(fd, data)
                             os.close(fd)
 
@@ -572,15 +592,37 @@ class NativeStrategy(_ExtractStrategy):
         files = self._collect(sga_path)
         self._create_dirs(files, output_dir)
 
+
         with self._disable_gc():
             self.verbose_logger.info(
                 f"Reading + decompressing {len(files)} files (parallel)..."
             )
             with self._timer() as timer:
-                with SgaReader(sga_path) as reader:
-                    results = reader.read_files_parallel(
+                with SgaReader(sga_path) as parser:
+                    buffers = parser.read_files_parallel(files,num_workers=self.num_workers)
+
+                with NativeMetadataToolV2(sga_path) as reader:
+                    _metas = reader.read_metadata_parallel(
                         files, num_workers=self.num_workers
                     )
+                    metas = {m.path:m for m in _metas}
+
+                read_results = []
+                DEFAULT_RESULT = FileMetadata("",None,None) # type: ignore
+                for data_results in buffers:
+                    meta_result = metas.get(data_results.path, ReadResult(data_results.path, DEFAULT_RESULT, None))
+                    err:str|None = None
+                    if data_results.error and meta_result.error:
+                        err = data_results.error + " | " + meta_result.error
+                    else:
+                        err = data_results.error or meta_result.error
+                    modified = meta_result.data.modified if meta_result.data is not None else None
+
+                    read_results.append(
+                        ReadResult(data_results.path, (data_results.data, modified), err)
+                    )
+
+
                 self.stats.timings.creating_batches = timer()
             self.verbose_logger.info(
                 f"Read + decompressed in {self.stats.timings.creating_batches:.2f}s"
@@ -589,7 +631,7 @@ class NativeStrategy(_ExtractStrategy):
             self.verbose_logger.info("Writing files to disk (parallel)...")
 
             def write_file(
-                item: ReadResult[bytes],
+                item: ReadResult[tuple[bytes,datetime.datetime]],
             ) -> WriteResult:
                 path = item.path
                 err = item.error
@@ -597,12 +639,13 @@ class NativeStrategy(_ExtractStrategy):
                     return WriteResult(item.path, False, err)
                 if item.data is None:
                     return WriteResult(item.path, False, "Data was None")
+                file_data, modified = item.data
                 try:
                     dst_path = Path(output_dir) / path.lstrip("/")
                     self.directories.ensure_directory(dst_path.parent)
                     if self.native_handles:
                         with dst_path.open("wb") as dst:
-                            dst.write(item.data)
+                            dst.write(file_data)
                     else:
                         fd = os.open(
                             dst_path,
@@ -611,8 +654,10 @@ class NativeStrategy(_ExtractStrategy):
                             | OSFlags.O_BINARY
                             | OSFlags.O_TRUNC,
                         )
-                        os.write(fd, item.data)
+                        os.write(fd, file_data)
                         os.close(fd)
+                    if modified is not None:
+                        os.utime(dst_path, (modified.timestamp(), modified.timestamp()))
                     return WriteResult(path, True, None)
                 except Exception as e:
                     return WriteResult(path, False, str(e))
@@ -620,24 +665,19 @@ class NativeStrategy(_ExtractStrategy):
             with self._timer() as timer:
                 with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                     write_results: List[WriteResult] = list(
-                        executor.map(write_file, results)
+                        executor.map(write_file, read_results)
                     )
                 self.stats.timings.executing_batches = timer()
 
             # Count results
             with self._timer() as timer:
+                size_lookup = {b.path:len(b.data) for b in buffers if b.data is not None}
                 for write_result in write_results:
 
                     if write_result.success:
                         self.stats.extracted_files += 1
                         # Get size from results
-                        for read_result in results:
-                            if read_result.data is None:
-                                break
-
-                            if read_result.path == write_result.path:
-                                self.stats.extracted_bytes += len(read_result.data)
-                                break
+                        self.stats.extracted_bytes += size_lookup.get(write_result.path, 0)
                     else:
                         self.stats.failed_files += 1
                         self.logger.error(
@@ -743,7 +783,7 @@ class ProgressiveStrategy(_ExtractStrategy):
 
         self.logger.info("Progressive extraction mode enabled")
         if on_file_extracted is None:
-            raise NotImplementedError()  # TODO better error
+            raise ValueError("on_file_extracted was not provided")  # TODO better error
         # Queue for extracted files
         result_queue: Queue[tuple[str, bytes] | None] = Queue()
 
@@ -1021,6 +1061,7 @@ class SerialStrategy(_ExtractStrategy):
         self._create_dirs(files, output_dir)
 
         self.stats.total_files = len(files)
+        processed = 0
         with self._disable_gc():
             with SgaReader(sga_path) as sga:
                 with self._timer() as timer:
@@ -1044,6 +1085,8 @@ class SerialStrategy(_ExtractStrategy):
                                 )
                                 os.write(fd, data)
                                 os.close(fd)
+                            if file.modified:
+                                os.utime(dst_path, (file.modified.timestamp(), file.modified.timestamp()))
                             self.stats.extracted_files += 1
                             self.stats.extracted_bytes += len(data)
 
@@ -1079,12 +1122,12 @@ class ExtractionMethod(IntEnum):
     Generally; use UltraFast or Native for best performance.
     """
 
-    Serial = 5
-    UltraFast = 0  # Rolled into optimized via config parameters
-    Optimized = 1
-    Streaming = 2
-    Native = 3
-    Delta = 4  # untested;
+    SERIAL = 5
+    ULTRA_FAST = 0  # Rolled into optimized via config parameters
+    OPTIMIZED = 1
+    STREAMING = 2
+    NATIVE = 3
+    DELTA = 4  # untested;
 
 
 class AdvancedParallelUnpacker:
@@ -1110,12 +1153,12 @@ class AdvancedParallelUnpacker:
         _delta = DeltaStrategy(self._config, self._cache, _optimized)
         _serial = SerialStrategy(self._config, self._cache)
         self._strategies = {
-            ExtractionMethod.Optimized: _optimized,
-            ExtractionMethod.Streaming: _streaming,
-            ExtractionMethod.UltraFast: _optimized,  # use optimized; same thing
-            ExtractionMethod.Native: _native,
-            ExtractionMethod.Delta: _delta,
-            ExtractionMethod.Serial: _serial,
+            ExtractionMethod.OPTIMIZED: _optimized,
+            ExtractionMethod.STREAMING: _streaming,
+            ExtractionMethod.ULTRA_FAST: _optimized,  # use optimized; same thing
+            ExtractionMethod.NATIVE: _native,
+            ExtractionMethod.DELTA: _delta,
+            ExtractionMethod.SERIAL: _serial,
         }
         self._default_extractor = _native
 
@@ -1124,7 +1167,7 @@ class AdvancedParallelUnpacker:
         sga_path: str,
         output_dir: str,
         on_progress: Callable[[int, int], None] | None = None,
-        method: ExtractionMethod = ExtractionMethod.Native,  # Based on personal testing
+        method: ExtractionMethod = ExtractionMethod.NATIVE,  # Based on personal testing
     ) -> ExtractionStats:
         extractor = self._strategies.get(method, self._default_extractor)
         stats = extractor.extract(sga_path, output_dir, on_progress)
