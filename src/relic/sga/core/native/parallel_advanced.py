@@ -44,13 +44,11 @@ from relic.sga.core.definitions import OSFlags
 from relic.sga.core.native.definitions import (
     FileEntry,
     ExtractionStats,
-    WriteResult,
     ReadResult,
-    ChecksumResult,
     BatchResult,
+    Result,
 )
-from relic.sga.core.native.native_reader import SgaReader
-from relic.sga.core.native.v2 import NativeParserV2, NativeMetadataToolV2, FileMetadata
+from relic.sga.core.native.handler import SgaReader, parser_registry
 
 ProgressCallback: TypeAlias = Callable[[int, int], None]
 
@@ -79,11 +77,33 @@ class _ExtractStrategy:
             )
             self.num_workers = 1
 
-        self.should_merge = config.should_merge
+        self.merging = config.should_merge
         self.chunk_size = config.chunk_size
         self._should_disable_gc = config.disable_gc
         self.batch_size = config.batch_size
         self.native_handles = config.native_files
+
+    def _write(
+        self,
+        output_dir: str,
+        path: str,
+        file_data: bytes,
+        modified: datetime.datetime | None,
+    ) -> None:
+        dst_path = Path(output_dir) / path.lstrip("/")
+        self.directories.ensure_directory(dst_path.parent)
+        if self.native_handles:
+            with dst_path.open("wb") as dst:
+                dst.write(file_data)
+        else:
+            fd = os.open(
+                dst_path,
+                OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY | OSFlags.O_TRUNC,
+            )
+            os.write(fd, file_data)
+            os.close(fd)
+        if modified is not None:
+            os.utime(dst_path, (modified.timestamp(), modified.timestamp()))
 
     def extract(
         self,
@@ -106,34 +126,22 @@ class _ExtractStrategy:
 
     def _collect(
         self, sga_path: str, file_filter: Optional[Sequence[str]] = None
-    ) -> list[FileEntry]:
+    ) -> Sequence[FileEntry]:
         self.verbose_logger.info("Collecting file paths...")
         with self._timer() as timer:
-            entries = NativeParserV2(sga_path, self.logger, self.should_merge).parse()
-            try:
-                self.verbose_logger.info("Collecting file metadata...")
-                with NativeMetadataToolV2(sga_path) as metadata_fetcher:
-                    _metas = metadata_fetcher.read_metadata_parallel(entries, num_workers=self.num_workers)
-                    metas = {}
-                    for r in _metas:
-                        if r.error is not None:
-                            ... # TODO; print X errors
-                        metas[r.path]=r.data
-                for entry in entries:
-                    meta = metas.get(entry.path)
-                    if meta is not None:
-                        entry.modified = meta.modified
-            except Exception as e:
-                self.logger.error("Error collecting metadata")
-                self.logger.exception(e)
-
+            with parser_registry.create_parser(sga_path) as versioned_parser:
+                entries = versioned_parser.parse()
             self.stats.timings.parsing_sga = timer()
 
         # Apply filter if provided (DELTA MODE!)
         if file_filter is not None:
             with self._timer() as timer:
                 file_filter_set = set(file_filter)
-                entries = [p for p in entries if p.path in file_filter_set]
+                entries = [
+                    p
+                    for p in entries
+                    if p.full_path(not self.merging) in file_filter_set
+                ]
                 self.stats.timings.filtering_files = timer()
             self.verbose_logger.info(f"Filtered to {len(entries)} changed files")
 
@@ -142,24 +150,67 @@ class _ExtractStrategy:
         return entries
 
     def _create_dirs(
-        self, entries: list[FileEntry], output_dir: str, force: bool = False
+        self,
+        entries: Sequence[FileEntry],
+        output_dir: str,
+        force: bool = False,
     ) -> None:
         if not force and not self._precreate_dirs:
             return
         self.verbose_logger.info("Pre-creating directory structure...")
         with self._timer() as timer:
-
             created_dirs = 0
             for file in entries:
-                dst_path = Path(output_dir) / file.path.lstrip("/")
+                dst_path = Path(output_dir) / file.full_path(
+                    include_drive=not self.merging
+                ).lstrip("/")
                 if self.directories.ensure_directory(dst_path.parent):
                     created_dirs += 1
             self.stats.timings.creating_dirs = timer()
         self.verbose_logger.info(f"Created {created_dirs} directories")
 
+    def _create_batches_parallel(
+        self, entries: Sequence[FileEntry], batch_size: int
+    ) -> List[tuple[int, int]]:
+        entry_count = len(entries)
+
+        def _batch(batch_id: int) -> Sequence[FileEntry]:
+            batch_start = batch_id * batch_size
+            batch_end = min(batch_start + batch_size, entry_count)
+            return batch_start, batch_end
+
+        with self._timer() as timer:
+            batch_count, remaining = divmod(entry_count, batch_size)
+            batch_ids = list(range(batch_size + (1 if remaining > 0 else 0)))
+            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+                batches: List[Result[FileEntry, bool]] = list(
+                    executor.map(_batch, batch_ids)
+                )
+            self.stats.timings.creating_batches = timer()
+        return batches
+
+    def _create_batches_serial(
+        self, entries: Sequence[FileEntry], batch_size: int
+    ) -> List[Sequence[FileEntry]]:
+        batches = []
+        with self._timer() as timer:
+            batch_count, remaining = divmod(len(entries), batch_size)
+
+            for i in range(batch_count):
+                ptr = i * batch_size, (i + 1) * batch_size
+                batches.append(ptr)
+            if remaining > 0:
+                offset = batch_count * batch_size
+                ptr = offset, offset + remaining
+                batches.append(ptr)
+
+                # batches.append(entries[offset : offset + remaining])
+            self.stats.timings.creating_batches = timer()
+        return batches
+
     def _create_batches(
-        self, entries: list[FileEntry], batch_size: int
-    ) -> List[List[FileEntry]]:
+        self, entries: Sequence[FileEntry], batch_size: int
+    ) -> List[tuple[int, int]]:
         self.verbose_logger.info(f"Extracting {len(entries)} files...")
         # Dont bother with stats if batching is skipped
         if batch_size == 0:
@@ -172,24 +223,21 @@ class _ExtractStrategy:
             return [entries]
 
         self.verbose_logger.info(f"Creating batches of '{batch_size}'")
-
-        # Create batches
-        batches = []
-        with self._timer() as timer:
-            batch_count, remaining = divmod(len(entries), batch_size)
-
-            for i in range(batch_count):
-                batches.append(entries[i * batch_size : (i + 1) * batch_size])
-            if remaining > 0:
-                offset = batch_count * batch_size
-                batches.append(entries[offset : offset + remaining])
-            self.stats.timings.creating_batches = timer()
+        batches = self._create_batches_parallel(entries, batch_size)
         self.verbose_logger.info(f"Created {len(batches)} batches")
         return batches
 
+        # Create batches
+
+    # def _extract_isolated(self, sga_path:str, output_dir:str, entry:FileEntry, merging:bool=False) -> Result[FileEntry,bool]:
+
     def _extract_batch_isolated(
-        self, sga_path: str, output_dir: str, batch: List[FileEntry]
-    ) -> List[BatchResult]:
+        self,
+        sga_path: str,
+        output_dir: str,
+        entries: Sequence[FileEntry],
+        batch: tuple[int, int],
+    ) -> List[Result[FileEntry, bool]]:
         """Extract batch of files with single SGA handle using NATIVE Python file operations.
 
         Uses native Python Path/open for output (FAST on Windows!) and fs library
@@ -203,16 +251,18 @@ class _ExtractStrategy:
         Returns:
             List of (success, path, error) tuples
         """
-        results: List[BatchResult] = []
+        results: List[Result[FileEntry, bool]] = []
 
         last_entry_completed = -1  # sentinel; -1 signifies no files completed
         try:
             # Open SGA once for entire batch
             with SgaReader(sga_path) as my_sga:
-                for i, entry in enumerate(batch):
+                for i in range(*batch):
+                    entry = entries[i]
+                    entry_path = entry.full_path(include_drive=not self.merging)
                     try:
                         # Get native destination path
-                        native_dst = Path(output_dir) / entry.path.lstrip("/")
+                        native_dst = Path(output_dir) / entry_path.lstrip("/")
 
                         # # Create parent directory (CACHED for speed!)
                         self.directories.ensure_directory(native_dst.parent)
@@ -236,43 +286,52 @@ class _ExtractStrategy:
                                     dst_file.flush()
                         else:
                             data = my_sga.read_file(entry)
+
                             fd = os.open(
                                 native_dst,
                                 OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
                             )
                             if entry.modified:
-                                os.utime(native_dst, (entry.modified.timestamp(), entry.modified.timestamp()))
+                                os.utime(
+                                    native_dst,
+                                    (
+                                        entry.modified.timestamp(),
+                                        entry.modified.timestamp(),
+                                    ),
+                                )
                             os.write(fd, data)
                             os.close(fd)
 
-                        results.append(BatchResult(True, entry.path, None))
+                        results.append(Result(entry, True))
                         last_entry_completed = i
 
                     except Exception as e:
-                        results.append(BatchResult(False, entry.path, str(e)))
+                        results.append(Result(entry, False, [e]))
 
         except Exception as e:
             # Batch failed entirely
-            for i, entry in enumerate(batch):
+            for i in range(*batch):
                 if i <= last_entry_completed:
                     continue
-                results.append(BatchResult(False, entry.path, f"Batch error: {str(e)}"))
+                results.append(Result(entries[i], False, [e]))
 
         return results
 
     def _execute_batches(
         self,
-        batches: List[List[FileEntry]],
+        entries: Sequence[FileEntry],
+        batches: Sequence[tuple[int, int]],
         executor: ThreadPoolExecutor,
         sga_path: str,
         output_dir: str,
-    ) -> list[Future[list[BatchResult]]]:
+    ) -> list[Future[list[Result[FileEntry, bool]]]]:
         futures = []
         for batch in batches:
-            future: Future[list[BatchResult]] = executor.submit(
+            future: Future[list[Result[FileEntry, bool]]] = executor.submit(
                 self._extract_batch_isolated,
                 sga_path,
                 output_dir,
+                entries,
                 batch,
             )
             futures.append(future)
@@ -280,7 +339,7 @@ class _ExtractStrategy:
 
     def _parse_batch_results(
         self,
-        futures: list[Future[list[BatchResult]]],
+        futures: list[Future[list[Result[FileEntry, bool]]]],
         on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         with self._timer() as timer:
@@ -289,14 +348,17 @@ class _ExtractStrategy:
                 results = future.result()
 
                 for result in results:
-                    if result.success:
+                    if result.output:
                         self.stats.extracted_files += 1
                         total_processed += 1
                     else:
                         self.stats.failed_files += 1
                         total_processed += 1
                         if self.stats.failed_files <= 10:  # Only show first 10 errors
-                            self.logger.error(f"Failed: {result.path}: {result.error}")
+                            for error in result.errors:
+                                self.logger.error(
+                                    f"Failed: {result.input.full_path(not self.merging)}: {error}"
+                                )
 
                     if on_progress:
                         on_progress(total_processed, self.stats.total_files)
@@ -399,7 +461,9 @@ class OptimizedStrategy(_ExtractStrategy):
             batches = self._create_batches(entries, self.batch_size)
 
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                futures = self._execute_batches(batches, executor, sga_path, output_dir)
+                futures = self._execute_batches(
+                    entries, batches, executor, sga_path, output_dir
+                )
                 self._parse_batch_results(futures, on_progress)
         # Summary
         self._print_summary()
@@ -433,137 +497,60 @@ class StreamingStrategy(_ExtractStrategy):
         self._create_dirs(entries, output_dir)
 
         with self._disable_gc():
-            # MULTI-READER with thread-local handles!
-            num_readers = min(
-                5, max(1, self.num_workers // 3)
-            )  # 5 readers for 15 workers
-            num_writers = max(self.num_workers - num_readers, 1)
 
-            self.logger.info(
-                f"Using {num_readers} readers (thread-local) + {num_writers} writers"
-            )
-
-            # Split files among readers
-            files_per_reader = math.ceil(len(entries) / num_readers)
-            reader_file_lists = self._create_batches(entries, files_per_reader)
-
-            # Shared deque with massive buffer
-            buffer_size = min(len(entries), 10000)
-            file_deque: deque[ReadResult[bytes]] = deque(maxlen=buffer_size)
-            self.logger.info(
-                f"Using {buffer_size}-file memory buffer (~{buffer_size * 500 / 1024:.0f} MB)"
-            )
-
-            deque_lock = threading.Lock()
-            deque_not_empty = threading.Condition(deque_lock)
-            readers_done = threading.Event()
-            active_readers = [num_readers]
-            total_processed = [0]
-            processing_lock = threading.Lock()
-
-            def reader_thread(file_list: list[FileEntry], _reader_id: int) -> None:
-                """Thread-local SGA handle reader."""
+            def read(entry: FileEntry) -> Result[FileEntry, bytes]:
                 try:
-                    # Each reader creates its own NativeSGAReader with thread-local handle
                     with SgaReader(sga_path) as reader:
-                        for file in file_list:
-                            try:
-                                data = reader.read_file(file)
+                        data = reader.read_file(entry)
+                        return Result(entry, data)
+                except Exception as e:
+                    return Result(entry, False, [e])
 
-                                with deque_not_empty:
-                                    while len(file_deque) >= buffer_size:
-                                        deque_not_empty.wait(0.001)
-                                    file_deque.append(ReadResult(file.path, data, None))
-                                    deque_not_empty.notify()
-                            except Exception as e:
-                                with deque_not_empty:
-                                    while len(file_deque) >= buffer_size:
-                                        deque_not_empty.wait(0.001)
-                                    file_deque.append(
-                                        ReadResult(file.path, None, str(e))
-                                    )
-                                    deque_not_empty.notify()
-                finally:
-                    with processing_lock:
-                        active_readers[0] -= 1
-                        if active_readers[0] == 0:
-                            readers_done.set()
+            def write(entry: FileEntry, data: bytes) -> Result[FileEntry, bool]:
+                try:
+                    self._write(
+                        output_dir,
+                        entry.full_path(not self.merging),
+                        data,
+                        entry.modified,
+                    )
+                    return Result(entry, True)
+                except Exception as e:
+                    return Result(entry, False, [e])
 
-            def writer_thread() -> None:
-                """Parallel writers."""
-                while not readers_done.is_set() or file_deque:
-                    with deque_not_empty:
-                        while not file_deque and not readers_done.is_set():
-                            deque_not_empty.wait(0.01)
+            with self._timer() as timer:
+                self.stats.total_files = len(entries)
 
-                        if not file_deque:
-                            break
-
-                        item = file_deque.popleft()
-                        deque_not_empty.notify()
-
-                    file_path, data, error = item.path, item.data, item.error
-
-                    if error:
-                        with processing_lock:
+                with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+                    read_futures = [executor.submit(read, entry) for entry in entries]
+                    write_futures = []
+                    read_fails = write_fails = 0
+                    for future in as_completed(read_futures):
+                        result: Result[FileEntry, bytes] = future.result()
+                        self.stats.total_bytes += result.input.decompressed_size
+                        if result.has_errors:
                             self.stats.failed_files += 1
-                            total_processed[0] += 1
-                            if self.stats.failed_files <= 10:
-                                self.logger.error(
-                                    f"Failed to read {file_path}: {error}"
-                                )
-                        continue
-
-                    try:
-                        dst_path = Path(output_dir) / file_path.lstrip("/")
-
-                        fd = os.open(
-                            dst_path,
-                            OSFlags.O_CREAT | OSFlags.O_WRONLY | OSFlags.O_BINARY,
-                        )
-                        os.write(fd, data)  # type: ignore
-                        os.close(fd)
-
-                        with processing_lock:
+                            if read_fails < 10:
+                                read_fails += 1
+                                for error in result.errors:
+                                    self.logger.error("Read Error: %s", error)
+                        else:
+                            write_futures.append(
+                                executor.submit(write, result.input, result.output)
+                            )
+                    for future in as_completed(write_futures):
+                        result = future.result()
+                        if result.has_errors or not result.output:
+                            self.stats.failed_files += 1
+                            if write_fails < 10:
+                                write_fails += 1
+                                for error in result.errors:
+                                    self.logger.error("Write Error: %s", error)
+                        else:
+                            self.stats.extracted_bytes += result.input.decompressed_size
                             self.stats.extracted_files += 1
-                            self.stats.extracted_bytes += len(data)  # type: ignore
-                            total_processed[0] += 1
 
-                            if on_progress and total_processed[0] % 500 == 0:
-                                on_progress(total_processed[0], self.stats.total_files)
-
-                    except Exception as e:
-                        with processing_lock:
-                            self.stats.failed_files += 1
-                            total_processed[0] += 1
-                            if self.stats.failed_files <= 10:
-                                self.logger.error(f"Failed to write {file_path}: {e}")
-
-            # Start readers
-            readers = []
-            for i in range(num_readers):
-                r = threading.Thread(
-                    target=reader_thread, args=(reader_file_lists[i], i), daemon=True
-                )
-                r.start()
-                readers.append(r)
-
-            # Start writers
-            writers = []
-            for _ in range(num_writers):
-                w = threading.Thread(target=writer_thread, daemon=True)
-                w.start()
-                writers.append(w)
-
-            # Wait for completion
-            for r in readers:
-                r.join()
-            for w in writers:
-                w.join()
-
-            # Final progress
-            if on_progress:
-                on_progress(total_processed[0], self.stats.total_files)
+                    self.stats.timings.executing_batches = timer()
 
         # Summary
         self._print_summary()
@@ -592,36 +579,15 @@ class NativeStrategy(_ExtractStrategy):
         files = self._collect(sga_path)
         self._create_dirs(files, output_dir)
 
-
         with self._disable_gc():
             self.verbose_logger.info(
                 f"Reading + decompressing {len(files)} files (parallel)..."
             )
             with self._timer() as timer:
                 with SgaReader(sga_path) as parser:
-                    buffers = parser.read_files_parallel(files,num_workers=self.num_workers)
-
-                with NativeMetadataToolV2(sga_path) as reader:
-                    _metas = reader.read_metadata_parallel(
+                    buffers = parser.read_files_parallel(
                         files, num_workers=self.num_workers
                     )
-                    metas = {m.path:m for m in _metas}
-
-                read_results = []
-                DEFAULT_RESULT = FileMetadata("",None,None) # type: ignore
-                for data_results in buffers:
-                    meta_result = metas.get(data_results.path, ReadResult(data_results.path, DEFAULT_RESULT, None))
-                    err:str|None = None
-                    if data_results.error and meta_result.error:
-                        err = data_results.error + " | " + meta_result.error
-                    else:
-                        err = data_results.error or meta_result.error
-                    modified = meta_result.data.modified if meta_result.data is not None else None
-
-                    read_results.append(
-                        ReadResult(data_results.path, (data_results.data, modified), err)
-                    )
-
 
                 self.stats.timings.creating_batches = timer()
             self.verbose_logger.info(
@@ -631,58 +597,41 @@ class NativeStrategy(_ExtractStrategy):
             self.verbose_logger.info("Writing files to disk (parallel)...")
 
             def write_file(
-                item: ReadResult[tuple[bytes,datetime.datetime]],
-            ) -> WriteResult:
-                path = item.path
-                err = item.error
-                if err:
-                    return WriteResult(item.path, False, err)
-                if item.data is None:
-                    return WriteResult(item.path, False, "Data was None")
-                file_data, modified = item.data
+                item: Result[FileEntry, bytes],
+            ) -> Result[FileEntry, bool]:
+                if item.has_errors:
+                    return Result(item.input, False, item.errors)
+                if item.output is None:
+                    return Result(item.input, False, ["Data was None"])
+                path = item.input.full_path(not self.merging)
+                file_data, modified = item.output, item.input.modified
                 try:
-                    dst_path = Path(output_dir) / path.lstrip("/")
-                    self.directories.ensure_directory(dst_path.parent)
-                    if self.native_handles:
-                        with dst_path.open("wb") as dst:
-                            dst.write(file_data)
-                    else:
-                        fd = os.open(
-                            dst_path,
-                            OSFlags.O_CREAT
-                            | OSFlags.O_WRONLY
-                            | OSFlags.O_BINARY
-                            | OSFlags.O_TRUNC,
-                        )
-                        os.write(fd, file_data)
-                        os.close(fd)
-                    if modified is not None:
-                        os.utime(dst_path, (modified.timestamp(), modified.timestamp()))
-                    return WriteResult(path, True, None)
+                    self._write(output_dir, path, file_data, modified)
+                    return Result(item.input, True)
                 except Exception as e:
-                    return WriteResult(path, False, str(e))
+                    return Result(item.input, False, [e])
 
             with self._timer() as timer:
                 with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                    write_results: List[WriteResult] = list(
-                        executor.map(write_file, read_results)
+                    write_results: List[Result[FileEntry, bool]] = list(
+                        executor.map(write_file, buffers)
                     )
                 self.stats.timings.executing_batches = timer()
 
             # Count results
             with self._timer() as timer:
-                size_lookup = {b.path:len(b.data) for b in buffers if b.data is not None}
                 for write_result in write_results:
-
-                    if write_result.success:
+                    if write_result.output:
                         self.stats.extracted_files += 1
-                        # Get size from results
-                        self.stats.extracted_bytes += size_lookup.get(write_result.path, 0)
+                        self.stats.extracted_bytes += (
+                            write_result.input.decompressed_size
+                        )
                     else:
                         self.stats.failed_files += 1
-                        self.logger.error(
-                            f"Failed to write {write_result.path}: {write_result.error}"
-                        )
+                        for error in write_result.errors:
+                            self.logger.error(
+                                f"Failed to write {write_result.input.full_path(not self.merging)}: {error}"
+                            )
                 self.stats.timings.parsing_results = timer()
 
         # Summary
@@ -705,7 +654,7 @@ class UnpackerConfig:
     native_files: bool = False
     precache_dirs: bool = True
     verbose: bool = False
-    should_merge: bool | Callable[[int], bool] = False
+    should_merge: bool = False
 
 
 class DirectoryCacher:
@@ -852,7 +801,7 @@ class DeltaStrategy(_ExtractStrategy):
 
     def _calculate_checksum_isolated(
         self, sga_path: str, entry: FileEntry
-    ) -> ChecksumResult:
+    ) -> Result[FileEntry, str]:
         """Calculate checksum with isolated SGA handle.
 
         Args:
@@ -865,9 +814,9 @@ class DeltaStrategy(_ExtractStrategy):
         try:
             with SgaReader(sga_path) as sga:
                 checksum = self._calculate_checksum(entry, sga)
-                return ChecksumResult(entry.path, checksum, None)
+                return Result(entry, checksum)
         except Exception as e:
-            return ChecksumResult(entry.path, None, str(e))
+            return Result.create_error(entry, e)
 
     def _build_manifest(self, sga_path: str) -> Dict[str, str]:
         """Build manifest of file checksums using parallel processing.
@@ -881,31 +830,35 @@ class DeltaStrategy(_ExtractStrategy):
         manifest = {}
 
         # Collect all file paths first
-        file_entries = NativeParserV2(
-            sga_path, self.logger, should_merge=self.should_merge
-        ).parse()
+        with parser_registry.create_parser(sga_path) as parser:
+            file_entries = parser.parse()
+            drive_count = parser.get_drive_count()
+            merging = (
+                self.should_merge
+                if isinstance(self.should_merge, bool)
+                else self.should_merge(drive_count)
+            )
 
         self.logger.info(f"Calculating checksums for {len(file_entries)} files...")
         num_workers = self.num_workers or 1
         # Calculate checksums in parallel
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(
-                    self._calculate_checksum_isolated, sga_path, file_path
-                ): file_path
+            futures = [
+                executor.submit(self._calculate_checksum_isolated, sga_path, file_path)
                 for file_path in file_entries
-            }
+            ]
 
             processed = 0
             for future in as_completed(futures):
-                result: ChecksumResult = future.result()
+                result: Result[FileEntry, str] = future.result()
 
-                if result.checksum:
-                    manifest[result.path] = result.checksum
+                if result.output:
+                    manifest[result.input.full_path(not self.merging)] = result.output
                 else:
-                    self.logger.warning(
-                        f"Could not checksum {result.path}: {result.error}"
-                    )
+                    for i, error in enumerate(result.errors):
+                        self.logger.error(
+                            f"Could not checksum {result.input.full_path(not self.merging)}: {error}"
+                        )
 
                 processed += 1
                 if processed % 1000 == 0:
@@ -1071,29 +1024,23 @@ class SerialStrategy(_ExtractStrategy):
                             data = sga.read_file(file)
 
                             # Write to disk
-                            dst_path = Path(output_dir) / file.path.lstrip("/")
-                            self.directories.ensure_directory(dst_path.parent)
-                            if self.native_handles:
-                                with dst_path.open("wb") as dst:
-                                    dst.write(data)
-                            else:
-                                fd = os.open(
-                                    dst_path,
-                                    OSFlags.O_CREAT
-                                    | OSFlags.O_WRONLY
-                                    | OSFlags.O_BINARY,
-                                )
-                                os.write(fd, data)
-                                os.close(fd)
-                            if file.modified:
-                                os.utime(dst_path, (file.modified.timestamp(), file.modified.timestamp()))
+
+                            self._write(
+                                output_dir,
+                                file.full_path(not self.merging),
+                                data,
+                                file.modified,
+                            )
+
                             self.stats.extracted_files += 1
                             self.stats.extracted_bytes += len(data)
 
                         except Exception as e:
                             self.stats.failed_files += 1
                             if self.stats.failed_files <= 3:
-                                self.logger.error(f"Failed {file.path}: {e}")
+                                self.logger.error(
+                                    f"Failed {file.full_path(not self.merging)}: {e}"
+                                )
 
                             # if on_progress and processed[0] % 500 == 0: # TODO fix the mod operation
                             if on_progress and processed % 50 == 0:
@@ -1167,7 +1114,7 @@ class AdvancedParallelUnpacker:
         sga_path: str,
         output_dir: str,
         on_progress: Callable[[int, int], None] | None = None,
-        method: ExtractionMethod = ExtractionMethod.NATIVE,  # Based on personal testing
+        method: ExtractionMethod = ExtractionMethod.STREAMING,  # Based on personal testing
     ) -> ExtractionStats:
         extractor = self._strategies.get(method, self._default_extractor)
         stats = extractor.extract(sga_path, output_dir, on_progress)
