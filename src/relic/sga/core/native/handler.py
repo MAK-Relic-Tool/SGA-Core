@@ -25,17 +25,9 @@ class SgaReader(ReadonlyMemMapFile):
     These three keys allow us to quickly read raw sga files and decompress them if needed
     """
 
-    def read(self, offset: int, size: int) -> bytes:
-        buffer = self._mmap_handle[offset : offset + size]
-        if len(buffer) != size:
-            raise MismatchError("read mismatch", len(buffer), size)
-        return buffer
-
-    def read_range(self, offset: int, terminal: int) -> bytes:
-        return self.read(offset, terminal - offset)
 
     def read_file(self, entry: FileEntry, decompress: bool = True) -> bytes:
-        raw = self.read(entry.data_offset, entry.compressed_size)
+        raw = self._read(entry.data_offset, entry.compressed_size)
         if not decompress:
             return raw
         if entry.storage_type in [StorageType.STORE]:
