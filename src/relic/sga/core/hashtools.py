@@ -5,6 +5,7 @@ from typing import BinaryIO, Optional, Generic, TypeVar, Type, Union, Protocol
 
 from relic.core.lazyio import read_chunks
 from relic.core.logmsg import BraceMessage
+
 from relic.sga.core.errors import (
     HashMismatchError,
     Md5MismatchError,
@@ -103,6 +104,7 @@ class Hasher(Generic[_T]):
                 name if name is not None else self._hasher_name, result, expected
             )
 
+_HASH_CHUNK_SIZE = 1024 * 1024 * 16
 
 def _md5(
     stream: Hashable,
@@ -116,7 +118,7 @@ def _md5(
         if eigen is not None
         else hashlib.md5(usedforsecurity=False)
     )
-    for chunk in read_chunks(stream, start, size):
+    for chunk in read_chunks(stream, start, size, chunk_size=_HASH_CHUNK_SIZE):
         hasher.update(chunk)
     return hasher.digest()
 
@@ -129,7 +131,7 @@ def _crc32(
     eigen: Optional[int] = None,
 ) -> int:
     crc = eigen if eigen is not None else 0
-    for chunk in read_chunks(stream, start, size):
+    for chunk in read_chunks(stream, start, size, chunk_size=_HASH_CHUNK_SIZE):
         crc = zlib.crc32(chunk, crc)
     return crc
 
@@ -146,7 +148,7 @@ def _sha1(
         if eigen is not None
         else hashlib.sha1(usedforsecurity=False)
     )
-    for chunk in read_chunks(stream, start, size):
+    for chunk in read_chunks(stream, start, size, chunk_size=_HASH_CHUNK_SIZE):
         hasher.update(chunk)
     return hasher.digest()
 

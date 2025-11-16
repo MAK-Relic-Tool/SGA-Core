@@ -1,8 +1,8 @@
 """Error definitions for the SGA API."""
 
-from typing import List, Optional, Generic, TypeVar
-
+from typing import List, Optional, Generic, TypeVar, Sequence
 from relic.core.errors import MismatchError, RelicToolError
+
 from relic.sga.core.definitions import Version
 
 _T = TypeVar("_T")
@@ -27,7 +27,7 @@ class VersionMismatchError(MismatchError[Version]):
 class VersionNotSupportedError(RelicToolError):
     """An unknown version was provided."""
 
-    def __init__(self, received: Version, allowed: List[Version]):
+    def __init__(self, received: Version, allowed: Sequence[Version]):
         super().__init__()
         self.received = received
         self.allowed = allowed

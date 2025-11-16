@@ -1,7 +1,6 @@
 import argparse
 import dataclasses
 import logging
-import os
 import random
 from io import StringIO
 from tempfile import TemporaryDirectory
