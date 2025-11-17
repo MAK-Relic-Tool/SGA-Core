@@ -82,8 +82,14 @@ class Version:
 
 
 class StorageType(int, Enum):
-    """Specifies whether data is stored as a 'raw blob' or as a 'zlib compressed
-    blob'."""
+    """Specifies whether data is stored as a 'raw blob' or as a 'zlib compressed blob'.
+
+    According to DoW:DE's modding documentation:
+    Link: https://help.relic.com/hc/en-us/articles/45716637039251-Warhammer-40-000-Dawn-of-War-Definitive-Edition-Mod-Assistant
+    0 (zero) :  No compression. The file is simply stored. This is typically used for small files where the overhead of decompression outweighs any advantage gained. It may (and should) also be used for file types (of any size) that do not compress well.
+    1        :	Stream compression. The file is compressed. It is decompressed on-the-fly as it is streamed from the archive.
+    2        :	Buffer compression. The file is compressed. The compressed file is loaded from the archive and then decompressed in memory.
+    """
 
     # According to modpackager
     STORE = 0
