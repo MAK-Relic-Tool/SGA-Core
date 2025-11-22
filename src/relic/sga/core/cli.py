@@ -15,20 +15,24 @@ from fs import open_fs
 from fs.base import FS
 from fs.copy import copy_fs
 from relic.core.cli import CliPluginGroup, _SubParsersAction, CliPlugin, RelicArgParser
-
-from relic.sga.core.definitions import MAGIC_WORD
-from relic.sga.core.essencefs import EssenceFS
-from relic.sga.core.essencefs.opener import registry as sga_registry
-from relic.sga.core.serialization import VersionSerializer
-from relic.core.logmsg import BraceMessage
 from relic.core.cli import (
     get_file_type_validator,
     get_dir_type_validator,
     get_path_validator,
 )
-from relic.sga.core.parallel_advanced import AdvancedParallelUnpacker
+from relic.core.logmsg import BraceMessage
+
+from relic.sga.core.definitions import MAGIC_WORD
+from relic.sga.core.essencefs import EssenceFS
+from relic.sga.core.essencefs.opener import registry as sga_registry
+from relic.sga.core.native.parallel_advanced import (
+    AdvancedParallelUnpacker,
+    UnpackerConfig,
+)
+from relic.sga.core.serialization import VersionSerializer
 
 _SUCCESS = 0
+_FAIL = 1
 
 # Backwards compatibility aliases for v2 package
 _get_file_type_validator = get_file_type_validator
@@ -56,7 +60,9 @@ class RelicSgaUnpackCli(CliPlugin):
         desc = """Unpack an SGA archive to the filesystem.
             If only one root is present in the SGA, '--merge' is implied.
             If multiple roots are in the SGA '--isolate' is implied.
-            Manually specify the flags to override this behaviour."""
+            Manually specify the flags to override this behaviour.
+            """
+
         if command_group is None:
             parser = RelicArgParser("unpack", description=desc)
         else:
@@ -88,17 +94,16 @@ class RelicSgaUnpackCli(CliPlugin):
         )
 
         # Performance options
-        parser.add_argument(
-            "--fast",
-            help="Use Fast native extraction (default, 80x faster)",
+        sga_legacy_flags = parser.add_mutually_exclusive_group()
+        sga_legacy_flags.add_argument(
+            "--legacy",
+            help="Use fs-based extraction instead of native/parallelized extraction",
             action="store_true",
-            default=True,
         )
-        parser.add_argument(
-            "--compatible",
-            help="Use compatible fs-based extraction (slower, more compatible)",
+        sga_legacy_flags.add_argument(
+            "--nolegacy",
+            help="Do not fallback to legacy extraction if native/parallelized extraction fails",
             action="store_true",
-            default=False,
         )
         parser.add_argument(
             "--workers",
@@ -114,7 +119,8 @@ class RelicSgaUnpackCli(CliPlugin):
         outdir: str = ns.out_dir
         merge: bool = ns.merge
         isolate: bool = ns.isolate
-        use_fast: bool = not ns.compatible  # Use fast unless --compatible specified
+        use_legacy: bool = ns.legacy
+        should_fallback = not ns.nolegacy
         num_workers: Optional[int] = ns.workers
 
         if merge and isolate:  # pragma: nocover
@@ -122,11 +128,19 @@ class RelicSgaUnpackCli(CliPlugin):
             raise relic.core.cli.RelicArgParserError(
                 "Isolate and Merge flags are mutually exclusive"
             )
+        if use_legacy and should_fallback:  # pragma: nocover
+            # This error should be impossible
+            raise relic.core.cli.RelicArgParserError(
+                "Legacy and NoLegacy flags are mutually exclusive"
+            )
 
         logger.info(f"Unpacking `{infile}`")
 
+        def use_merge_mode(drive_count: int) -> bool:
+            return merge or (not isolate and drive_count == 1)
+
         # Use Fast native extraction by default
-        if use_fast:
+        if not use_legacy:
             try:
                 import multiprocessing
 
@@ -135,7 +149,15 @@ class RelicSgaUnpackCli(CliPlugin):
 
                 logger.info(f"Using Fast native extraction ({num_workers} workers)")
                 unpacker = AdvancedParallelUnpacker(
-                    num_workers=num_workers, enable_delta=False, logger=logger
+                    UnpackerConfig(
+                        num_workers=num_workers,
+                        logger=logger,
+                        disable_gc=True,
+                        native_files=False,
+                        precache_dirs=True,
+                        verbose=True,
+                        should_merge=use_merge_mode,
+                    )
                 )
 
                 # Progress callback
@@ -145,27 +167,29 @@ class RelicSgaUnpackCli(CliPlugin):
                             f"  Progress: {current}/{total} files ({current*100//total}%)"
                         )
 
-                stats = unpacker.extract_native_ultra_fast(
-                    infile, outdir, on_progress=_progress
-                )
+                stats = unpacker.extract(infile, outdir, on_progress=_progress)
 
                 logger.info(
                     f"Extraction complete: {stats.extracted_files} files extracted"
                 )
                 if stats.failed_files > 0:
                     logger.warning(f"Failed: {stats.failed_files} files")
-                    return 1
+                    return _FAIL
 
                 return _SUCCESS
 
             except Exception as e:
-                logger.warning(f"Fast extraction failed: {e}")
-                logger.info("Falling back to compatible mode...")
-                use_fast = False
+                logger.warning("Fast extraction failed:")
+                logger.exception(e)
+                if use_legacy:
+                    logger.info("Falling back to legacy mode...")
+                else:
+                    return _FAIL
+                use_legacy = should_fallback
 
         # Fallback to compatible fs-based extraction
-        if not use_fast:
-            logger.info("Using compatible fs-based extraction")
+        if use_legacy:
+            logger.info("Using fs-based (legacy) extraction")
 
             def _callback(_1: FS, srcfile: str, _2: FS, dstfile: str) -> None:
                 logger.info(f"\t\tUnpacking File `{srcfile}`\n\t\tWrote to `{dstfile}`")
@@ -174,8 +198,9 @@ class RelicSgaUnpackCli(CliPlugin):
             sga: EssenceFS
             with open_fs(infile, default_protocol="sga") as sga:  # type: ignore
                 roots = list(sga.iterate_fs())
+
                 # Explicit and Implicit merge; we reuse sga to avoid reopening the filesystem
-                if merge or (not isolate and len(roots) == 1):
+                if use_merge_mode(len(roots)):
                     copy_fs(
                         sga, f"osfs://{outdir}", on_copy=_callback, preserve_time=True
                     )
@@ -198,9 +223,8 @@ class EssenceInfoEncoder(JSONEncoder):
             return dataclasses.asdict(o)  # type: ignore
         try:
             return super().default(o)
-        except (
-            TypeError
-        ):  # Kinda bad; but we don't want to serialize, we want to logger.info; so i think this is an acceptable tradeoff
+        # Kinda bad; but we don't want to serialize, we want to logger.info; so i think this is an acceptable tradeoff
+        except TypeError:
             return str(o)
 
 
@@ -263,7 +287,7 @@ class RelicSgaInfoCli(CliPlugin):
             os.makedirs(outjson_dir, exist_ok=True)
             outjson = os.path.join(outjson_dir, outjson_file)
 
-            with open(outjson, "w", encoding=None) as info_h:
+            with open(outjson, "w", encoding="utf8") as info_h:
                 json_kwargs: Dict[str, Any] = (
                     self._JSON_MINIFY_KWARGS if minify else self._JSON_MAXIFY_KWARGS
                 )
@@ -331,16 +355,17 @@ class RelicSgaVersionCli(CliPlugin):
             with open(sga_file, "rb") as sga:
                 if not MAGIC_WORD.check(sga, advance=True):
                     logger.warning("File is not an SGA")
-                else:
-                    version = VersionSerializer.read(sga)
-                    logger.info(version)
+                    return _FAIL
+
+                version = VersionSerializer.read(sga)
+                logger.info(version)
+                return _SUCCESS
         except IOError:  # pragma: nocover
             # I don't know how to force an io error here for coverage testing
             # we safely handle bad file paths
             # So I believe this only occurs when a genuine fatal error occurs
             logger.error("Error reading file")
             raise
-        return None
 
 
 class RelicSgaListCli(CliPlugin):
@@ -362,5 +387,4 @@ class RelicSgaListCli(CliPlugin):
             logger.info(key)
         if len(keys) == 0:
             logger.info("No Plugins Found!")
-
         return None

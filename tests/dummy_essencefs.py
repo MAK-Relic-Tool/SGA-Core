@@ -1,7 +1,6 @@
 import random
 from typing import Iterator, Tuple, List, BinaryIO, Any, Dict
 
-import fs.opener.registry
 from fs import open_fs
 from fs.base import FS
 from fs.memoryfs import MemoryFS

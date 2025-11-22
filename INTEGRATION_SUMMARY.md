@@ -26,7 +26,7 @@ relic sga unpack archive.sga ./output
 - **86x faster** than original
 - **3-4 seconds** for 7,815 files
 
-#### **`--compatible`**
+#### **`--legacy`**
 
 - Fallback to fs-based extraction
 - Use if fast mode has issues
@@ -42,10 +42,10 @@ relic sga unpack archive.sga ./output
 
 ## 📊 Performance Comparison
 
-| Mode | Command | Time | Speed | Use Case |
-|------|---------|------|-------|----------|
-| **Fast (NEW DEFAULT)** | `relic sga unpack file.sga out/` | **3.5s** | **2,248 files/s** | Production use |
-| Compatible (Legacy) | `relic sga unpack file.sga out/ --compatible` | 300s | 26 files/s | Compatibility |
+| Mode | Command                                   | Time | Speed | Use Case |
+|------|-------------------------------------------|------|-------|----------|
+| **Fast (NEW DEFAULT)** | `relic sga unpack file.sga out/`          | **3.5s** | **2,248 files/s** | Production use |
+| Compatible (Legacy) | `relic sga unpack file.sga out/ --legacy` | 300s | 26 files/s | Compatibility |
 
 **Performance Gain: 86x faster!** 🚀
 
@@ -98,11 +98,7 @@ relic sga unpack archive.sga ./output --isolate
 
 ```python
 # Use the advanced parallel unpacker
-from relic.sga.core.parallel_advanced import AdvancedParallelUnpacker
-
-# Standard extraction (still fast)
-unpacker = AdvancedParallelUnpacker(num_workers=4)
-stats = unpacker.extract_streaming(sga_path, output_dir)
+from relic.sga.core.native.parallel_advanced import AdvancedParallelUnpacker
 
 # Fast extraction (86x faster!)
 unpacker = AdvancedParallelUnpacker(num_workers=15)
